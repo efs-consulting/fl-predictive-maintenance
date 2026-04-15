@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/bin/python -c \"import main; print\\('main.py OK'\\)\")",
+      "Bash(node --input-type=module)",
+      "Bash(node -e \"require\\('fs'\\).readFileSync\\('/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/static/js/app.js','utf8'\\) && console.log\\('JS syntax OK'\\)\")",
+      "Bash(venv/bin/python -c \"import sklearn; print\\(sklearn.__version__\\); from sklearn.metrics import f1_score, classification_report; print\\('sklearn metrics OK'\\)\")",
+      "Bash(pip list:*)",
+      "Bash(\"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/venv/bin/pip\" list)",
+      "Bash(mkdir -p \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/data\" \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/nginx\")",
+      "Bash(mv \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/X.npy\" \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/data/\")",
+      "Bash(mv \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/y.npy\" \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/data/\")",
+      "Bash(mv \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/meta.csv\" \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/data/\")",
+      "Bash(python -c ':*)",
+      "Bash(python3 -c ':*)"
+    ]
+  }
+}

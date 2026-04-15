@@ -1,0 +1,38 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Data files (mounted as Docker volumes — not baked into the image) ─────────
+data/
+*.npy
+*.mat
+cwru_data/
+
+# ── Saved models (mounted as a Docker volume) ─────────────────────────────────
+models/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── OS artefacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Version control ───────────────────────────────────────────────────────────
+.git/
+.gitignore
+.gitattributes
