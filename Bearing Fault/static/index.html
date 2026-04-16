@@ -38,12 +38,26 @@
         <div class="conn-dot"></div>
         <span id="conn-text">Connecting…</span>
       </div>
-      <button class="btn btn-primary" id="btn-start" onclick="startTraining()">
+      <button class="btn btn-ghost" id="btn-report" onclick="generateReport()"
+              data-tooltip="Generate a professional PDF report with all training results, predictions, and benchmark comparisons.">
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+             fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+          <polyline points="10 9 9 9 8 9"/>
+        </svg>
+        Report
+      </button>
+      <button class="btn btn-primary" id="btn-start" onclick="startTraining()"
+              data-tooltip="Launch the federated training session using the current settings. The server coordinates all clients round by round.">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
              fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Start Training
       </button>
-      <button class="btn btn-danger" id="btn-stop" disabled onclick="stopTraining()">
+      <button class="btn btn-danger" id="btn-stop" disabled onclick="stopTraining()"
+              data-tooltip="Interrupt the current training session. The best model checkpoint is preserved.">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
              fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
         Stop
@@ -56,18 +70,21 @@
   <div id="sidebar-scroll">
 
     <!-- Data Settings -->
-    <div class="section-header" onclick="toggleSection(this)">
+    <div class="section-header" onclick="toggleSection(this)"
+         data-tooltip="Controls how the bearing dataset is divided among FL clients — each client holds its own local subset and never shares raw data.">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
            fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       Data Partitioning
     </div>
     <div class="section-body" id="sec-data">
-      <div class="field">
+      <div class="field"
+           data-tooltip="Number of independent devices or sites participating. Each client trains on its own bearing data without sharing it with others.">
         <label>Number of Clients <span id="lbl-clients">4</span></label>
         <input type="range" id="num_clients" min="2" max="20" value="4"
                oninput="document.getElementById('lbl-clients').textContent=this.value" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="How data is distributed across clients. IID = every client gets an equal mix of all fault classes (idealized). Non-IID = unequal distributions, which is more realistic in real deployments.">
         <label>Partition Strategy</label>
         <select id="partition_strategy" onchange="toggleAlpha()">
           <option value="iid">IID (Uniform)</option>
@@ -75,7 +92,8 @@
           <option value="by_load">Non-IID by Load</option>
         </select>
       </div>
-      <div class="field" id="field-alpha">
+      <div class="field" id="field-alpha"
+           data-tooltip="Dirichlet concentration parameter. Low values (e.g. 0.1) create extreme heterogeneity — each client may hold only one fault class. Higher values produce more balanced distributions across clients.">
         <label>Dirichlet α <span id="lbl-alpha">0.5</span>
           <small style="color:#475569;font-size:10px">(↓ = more heterogeneous)</small>
         </label>
@@ -85,23 +103,27 @@
     </div>
 
     <!-- FL Settings -->
-    <div class="section-header" onclick="toggleSection(this)">
+    <div class="section-header" onclick="toggleSection(this)"
+         data-tooltip="Settings for the global FL loop. The server orchestrates training rounds, collects model updates from clients, and aggregates them — raw data never leaves the clients.">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
            fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       Federated Learning
     </div>
     <div class="section-body" id="sec-fl">
-      <div class="field">
+      <div class="field"
+           data-tooltip="Number of server-client communication cycles. Each round: clients train locally, send weight updates to the server, the server aggregates them into a new global model and broadcasts it back.">
         <label>Rounds <span id="lbl-rounds">10</span></label>
         <input type="range" id="num_rounds" min="1" max="100" value="10"
                oninput="document.getElementById('lbl-rounds').textContent=this.value" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Fraction of clients selected to participate in each round. 1.0 = all clients train every round. Lower values simulate partial device availability, as is common in real federated deployments.">
         <label>Fraction Fit <span id="lbl-frac">1.0</span></label>
         <input type="range" id="fraction_fit" min="0.1" max="1.0" step="0.1" value="1.0"
                oninput="document.getElementById('lbl-frac').textContent=parseFloat(this.value).toFixed(1)" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Algorithm the server uses to merge client model updates. FedAvg = weighted average (the standard baseline). FedProx = adds a regularization term. FedNova = corrects for unequal local steps. FedBN = keeps batch-norm statistics local, shares all other layers.">
         <label>Aggregation Strategy</label>
         <select id="aggregation_strategy" onchange="toggleMu()">
           <option value="fedavg">FedAvg</option>
@@ -110,12 +132,14 @@
           <option value="fedbn">FedBN</option>
         </select>
       </div>
-      <div class="field field-hidden" id="field-mu">
+      <div class="field field-hidden" id="field-mu"
+           data-tooltip="Proximal penalty strength for FedProx. Higher values pull each client model closer to the global model during local training — useful when client data distributions are very different.">
         <label>FedProx μ <span id="lbl-mu">0.01</span></label>
         <input type="range" id="fedprox_mu" min="0.0001" max="1.0" step="0.0001" value="0.01"
                oninput="document.getElementById('lbl-mu').textContent=parseFloat(this.value).toFixed(4)" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Stop training automatically if the global validation accuracy does not improve for this many consecutive rounds. Prevents wasted computation. Set to 0 to always run all rounds.">
         <label>Early Stopping <span id="lbl-patience">0</span>
           <small style="color:#475569;font-size:10px">(rounds · 0 = off)</small>
         </label>
@@ -125,18 +149,21 @@
     </div>
 
     <!-- Local Training -->
-    <div class="section-header" onclick="toggleSection(this)">
+    <div class="section-header" onclick="toggleSection(this)"
+         data-tooltip="Standard ML training hyperparameters applied on each client device during every FL round. These are the same knobs you would tune in a regular supervised learning setup.">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
            fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       Local Training
     </div>
     <div class="section-body" id="sec-local">
-      <div class="field">
+      <div class="field"
+           data-tooltip="Number of full passes over each client dataset per FL round. More epochs = more local specialization, but can cause client drift — the local model diverges from the global model on non-IID data.">
         <label>Local Epochs <span id="lbl-epochs">3</span></label>
         <input type="range" id="local_epochs" min="1" max="20" value="3"
                oninput="document.getElementById('lbl-epochs').textContent=this.value" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Number of samples per gradient update step. Smaller batches add noise that can help generalization; larger batches train faster but may converge to sharper minima.">
         <label>Batch Size</label>
         <select id="batch_size">
           <option value="16">16</option>
@@ -146,7 +173,8 @@
           <option value="256">256</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Step size controlling how much model weights change per gradient update. Too large = unstable training; too small = very slow convergence. 0.001 is a reliable default for Adam.">
         <label>Learning Rate</label>
         <select id="learning_rate">
           <option value="0.1">0.1</option>
@@ -155,7 +183,8 @@
           <option value="0.0001">0.0001</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Gradient descent variant used for local training. Adam adapts learning rates per parameter and is a strong default. SGD is the classic choice with momentum. AdamW applies weight decay correctly, decoupled from the gradient update.">
         <label>Optimizer</label>
         <select id="optimizer">
           <option value="adam" selected>Adam</option>
@@ -163,7 +192,8 @@
           <option value="adamw">AdamW</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Adjusts the learning rate during training. None = fixed LR throughout. StepLR = multiplied by 0.9 each epoch. Cosine Annealing = smooth decay to zero. Warmup+Cosine = starts small, warms up, then decays smoothly.">
         <label>LR Scheduler</label>
         <select id="lr_scheduler">
           <option value="none" selected>None</option>
@@ -172,7 +202,8 @@
           <option value="warmup_cosine">Warmup + Cosine</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="L2 regularization: adds a penalty proportional to the square of each weight into the loss function. Discourages large weights, reducing overfitting — especially useful on small local datasets.">
         <label>Weight Decay</label>
         <select id="weight_decay">
           <option value="0">0</option>
@@ -181,26 +212,30 @@
           <option value="0.01">1e-2</option>
         </select>
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Clips gradient vectors whose L2 norm exceeds this threshold before the weight update. Prevents exploding gradients, which can destabilize training. Especially useful with recurrent architectures (BiLSTM). 0 = disabled.">
         <label>Gradient Clip <span id="lbl-clip">1.0</span>
           <small style="color:#475569;font-size:10px">(0 = off)</small>
         </label>
         <input type="range" id="grad_clip" min="0" max="5" step="0.1" value="1.0"
                oninput="document.getElementById('lbl-clip').textContent=parseFloat(this.value).toFixed(1)" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Replaces hard one-hot labels (0 or 1) with soft targets (e.g. 0.05 / 0.95). Makes the model less overconfident, often improving calibration and generalization on unseen data.">
         <label>Label Smoothing <span id="lbl-smooth">0.00</span></label>
         <input type="range" id="label_smoothing" min="0" max="0.3" step="0.01" value="0.0"
                oninput="document.getElementById('lbl-smooth').textContent=parseFloat(this.value).toFixed(2)" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Adds small random Gaussian noise to each training sample on-the-fly. Simulates real sensor variability, acts as a regularizer, and can improve robustness to measurement noise.">
         <label>Data Augmentation</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
           <input type="checkbox" id="use_augmentation" onchange="toggleAugmentation()" />
           <span style="font-size:12px;color:#94a3b8">Gaussian noise on inputs</span>
         </label>
       </div>
-      <div class="field field-hidden" id="field-aug-noise">
+      <div class="field field-hidden" id="field-aug-noise"
+           data-tooltip="Standard deviation of the Gaussian noise added to each input sample. Should remain small relative to the signal amplitude (around 0.01–0.05 g). Larger values produce stronger augmentation.">
         <label>Noise Std Dev <span id="lbl-noise">0.010</span></label>
         <input type="range" id="aug_noise_std" min="0.001" max="0.5" step="0.001" value="0.01"
                oninput="document.getElementById('lbl-noise').textContent=parseFloat(this.value).toFixed(3)" />
@@ -208,13 +243,15 @@
     </div>
 
     <!-- Model -->
-    <div class="section-header" onclick="toggleSection(this)">
+    <div class="section-header" onclick="toggleSection(this)"
+         data-tooltip="Choose the neural network architecture that classifies 1D bearing vibration signals. All models take raw accelerometer data as input — no manual feature extraction needed.">
       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
            fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
       Model Architecture
     </div>
     <div class="section-body" id="sec-model">
-      <div class="field">
+      <div class="field"
+           data-tooltip="Neural network for 1D vibration signal classification. CNN1D: lightweight and fast, strong baseline. ResNet1D: deeper with skip connections for learning complex features. BiLSTM: bidirectional LSTM for sequential temporal patterns. TCN: dilated temporal convolutions that capture long-range dependencies efficiently.">
         <label>Model Type</label>
         <div class="radio-group">
           <input type="radio" name="model_type" id="mt-cnn" value="cnn1d" checked />
@@ -227,12 +264,14 @@
           <label for="mt-tcn">TCN</label>
         </div>
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Fraction of neurons randomly disabled during each training forward pass. A standard regularization technique that reduces overfitting. Too high a value can prevent the model from learning effectively.">
         <label>Dropout <span id="lbl-dropout">0.30</span></label>
         <input type="range" id="dropout" min="0.0" max="0.9" step="0.05" value="0.3"
                oninput="document.getElementById('lbl-dropout').textContent=parseFloat(this.value).toFixed(2)" />
       </div>
-      <div class="field">
+      <div class="field"
+           data-tooltip="Random seed for weight initialization and data shuffling. Fixing this value ensures that results are fully reproducible across runs. Try different seeds to estimate variance in your results.">
         <label>Random Seed</label>
         <input type="number" id="seed" value="42" min="0" max="99999" />
       </div>
@@ -241,17 +280,20 @@
   </div><!-- /#sidebar-scroll -->
 
   <div class="sidebar-actions">
-      <button class="btn btn-primary" id="btn-start-2" onclick="startTraining()">
+      <button class="btn btn-primary" id="btn-start-2" onclick="startTraining()"
+              data-tooltip="Launch the federated training session using the current settings.">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
              fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Start Training
       </button>
-      <button class="btn btn-danger" id="btn-stop-2" disabled onclick="stopTraining()">
+      <button class="btn btn-danger" id="btn-stop-2" disabled onclick="stopTraining()"
+              data-tooltip="Interrupt the current training session. The best model checkpoint is preserved.">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
              fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
         Stop Training
       </button>
-      <button class="btn btn-ghost" onclick="resetUI()">
+      <button class="btn btn-ghost" onclick="resetUI()"
+              data-tooltip="Clear all charts and the training log. Does not delete saved models.">
         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
              fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.4"/></svg>
         Reset Charts
@@ -264,17 +306,20 @@
 
     <!-- Tab navigation -->
     <div class="tab-nav">
-      <button class="tab-btn active" id="tab-dashboard" onclick="switchTab('dashboard')">
+      <button class="tab-btn active" id="tab-dashboard" onclick="switchTab('dashboard')"
+              data-tooltip="Live training view: convergence charts, per-client metrics, data distribution, and the training log console.">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
              fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
         Dashboard
       </button>
-      <button class="tab-btn" id="tab-predict" onclick="switchTab('predict')">
+      <button class="tab-btn" id="tab-predict" onclick="switchTab('predict')"
+              data-tooltip="Classify a new bearing vibration signal using one or more trained federated models. Supports ensemble voting across multiple models.">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
              fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         Predict
       </button>
-      <button class="tab-btn" id="tab-benchmark" onclick="switchTab('benchmark')">
+      <button class="tab-btn" id="tab-benchmark" onclick="switchTab('benchmark')"
+              data-tooltip="Evaluate and compare saved models on the held-out test set. Shows accuracy, F1 scores, confusion matrices, and inference timing side-by-side.">
         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
              fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
         Benchmark
@@ -289,15 +334,18 @@
       <div class="progress-label">Round <strong id="prog-cur">0</strong> / <strong id="prog-tot">—</strong></div>
       <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
       <div class="stat-chips">
-        <div class="chip">
+        <div class="chip"
+             data-tooltip="Global model validation accuracy at the end of the latest FL round.">
           <span class="chip-label">Accuracy</span>
           <span class="chip-value green" id="stat-acc">—</span>
         </div>
-        <div class="chip">
+        <div class="chip"
+             data-tooltip="Global model cross-entropy loss on validation data after the latest round. Lower values indicate better fit.">
           <span class="chip-label">Loss</span>
           <span class="chip-value red" id="stat-loss">—</span>
         </div>
-        <div class="chip">
+        <div class="chip"
+             data-tooltip="Best validation accuracy achieved across all completed rounds. The model from this round is saved as the checkpoint.">
           <span class="chip-label">Best</span>
           <span class="chip-value blue" id="stat-best">—</span>
         </div>
@@ -307,14 +355,16 @@
     <!-- Top charts: loss + accuracy -->
     <div class="charts-grid">
       <div class="chart-card">
-        <div class="chart-title">
+        <div class="chart-title"
+             data-tooltip="Cross-entropy loss of the aggregated global model evaluated after each FL round. A consistently decreasing curve confirms the federation is converging.">
           <div class="chart-title-dot" style="background:#f87171"></div>
           Global Loss per Round
         </div>
         <div class="chart-wrap"><canvas id="chart-loss"></canvas></div>
       </div>
       <div class="chart-card">
-        <div class="chart-title">
+        <div class="chart-title"
+             data-tooltip="Validation accuracy of the global model after each FL round. The dashed line marks the best round achieved so far.">
           <div class="chart-title-dot" style="background:#4ade80"></div>
           Global Accuracy per Round
         </div>
@@ -324,7 +374,8 @@
 
     <!-- Per-client accuracy -->
     <div class="chart-card">
-      <div class="chart-title">
+      <div class="chart-title"
+           data-tooltip="Individual validation accuracy for each client per round. A wide spread between client lines indicates high data heterogeneity — the non-IID effect in action.">
         <div class="chart-title-dot" style="background:#818cf8"></div>
         Per-Client Validation Accuracy
       </div>
@@ -333,7 +384,8 @@
 
     <!-- Client metrics table -->
     <div class="chart-card">
-      <div class="chart-title">
+      <div class="chart-title"
+           data-tooltip="Per-client training and validation statistics from the most recent FL round. Useful for diagnosing which clients are struggling, which have too few samples, or which are converging faster.">
         <div class="chart-title-dot" style="background:#fbbf24"></div>
         Client Metrics — Latest Round
       </div>
@@ -363,14 +415,16 @@
     <!-- Data distribution + Confusion matrix -->
     <div class="charts-grid">
       <div class="chart-card">
-        <div class="chart-title">
+        <div class="chart-title"
+             data-tooltip="Stacked bars showing how many samples of each fault class (Normal, Inner Race, Outer Race, Ball) each client holds. Uneven bars confirm Non-IID partitioning and explain per-client performance differences.">
           <div class="chart-title-dot" style="background:#38bdf8"></div>
           Data Distribution per Client
         </div>
         <div class="chart-wrap"><canvas id="chart-dist"></canvas></div>
       </div>
       <div class="chart-card">
-        <div class="chart-title">
+        <div class="chart-title"
+             data-tooltip="Rows = true fault class, columns = predicted class. Diagonal cells = correct predictions. Off-diagonal cells reveal which fault types the global model confuses with each other.">
           <div class="chart-title-dot" style="background:#a78bfa"></div>
           Confusion Matrix (Final)
         </div>
@@ -403,7 +457,8 @@
 
       <!-- ── Model Library (full-width) ──────────────────────────────── -->
       <div class="chart-card" id="model-library-card">
-        <div class="chart-title" style="cursor:pointer;user-select:none" onclick="toggleLibrary()">
+        <div class="chart-title" style="cursor:pointer;user-select:none" onclick="toggleLibrary()"
+             data-tooltip="Saved federated models from completed training sessions. Select one or more to use for classification or ensemble voting.">
           <div class="chart-title-dot" style="background:#818cf8"></div>
           Model Library
           <span id="lib-count-badge" class="lib-count-badge">0 models</span>
@@ -453,7 +508,8 @@
 
           <!-- Format spec -->
           <div class="chart-card">
-            <div class="chart-title">
+            <div class="chart-title"
+                 data-tooltip="Specification for the bearing vibration signal. Data comes from a drive-end accelerometer sampled at 48 kHz (e.g. CWRU dataset). Values are raw g-force readings — no normalization needed before pasting.">
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
                    fill="none" stroke="#818cf8" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
               Input Format
@@ -488,7 +544,8 @@
 
           <!-- Signal input -->
           <div class="chart-card">
-            <div class="chart-title">
+            <div class="chart-title"
+                 data-tooltip="Enter a vibration signal by pasting values, uploading a file, or using a built-in sample. Signals longer than 1024 samples are split into windows automatically, and predictions are combined by majority vote.">
               <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24"
                    fill="none" stroke="#818cf8" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
               Signal Input
@@ -530,7 +587,8 @@
 
           <!-- Classify button -->
           <button class="btn btn-primary" id="btn-classify" onclick="classifySignal()"
-                  style="width:100%;padding:12px;font-size:14px;justify-content:center" disabled>
+                  style="width:100%;padding:12px;font-size:14px;justify-content:center" disabled
+                  data-tooltip="Run the selected model(s) on the input signal. If multiple models are selected, their predictions are combined via majority voting to produce an ensemble result.">
             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24"
                  fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             Classify Signal
@@ -542,7 +600,8 @@
 
           <!-- Waveform preview -->
           <div class="chart-card" id="waveform-card" style="display:none">
-            <div class="chart-title">
+            <div class="chart-title"
+                 data-tooltip="Time-domain plot of the input vibration signal (amplitude in g vs. sample index). Fault types often leave visible patterns — e.g. periodic impulses for inner race faults.">
               <div class="chart-title-dot" style="background:#38bdf8"></div>
               Signal Waveform Preview
               <span id="waveform-label" style="margin-left:auto;font-size:11px;color:#64748b;text-transform:none;letter-spacing:0;font-weight:400"></span>
@@ -555,7 +614,8 @@
 
       <!-- Prediction Results — full width, shows all selected models side-by-side -->
       <div class="chart-card" id="result-card">
-        <div class="chart-title">
+        <div class="chart-title"
+             data-tooltip="Fault class predictions and confidence scores from the selected model(s). Each model produces a softmax probability over the four classes: Normal, Inner Race, Outer Race, Ball.">
           <div class="chart-title-dot" style="background:#a78bfa"></div>
           Prediction Results
         </div>
@@ -579,7 +639,8 @@
 
       <!-- ── Model Selection ─────────────────────────────────────────────── -->
       <div class="chart-card">
-        <div class="chart-title" style="flex-wrap:wrap;gap:8px">
+        <div class="chart-title" style="flex-wrap:wrap;gap:8px"
+             data-tooltip="Choose which saved federated models to include in the benchmark comparison. All selected models are evaluated on the same held-out test set for a fair comparison.">
           <div class="chart-title-dot" style="background:#f472b6"></div>
           Select Models to Compare
           <span id="bm-count-badge" class="lib-count-badge">0 models</span>
@@ -608,7 +669,8 @@
         <div id="bm-footer" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #334155;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
           <span id="bm-footer-text" style="font-size:12px;color:#94a3b8"></span>
           <button class="btn btn-primary" id="btn-run-benchmark" disabled onclick="runBenchmark()"
-                  style="padding:8px 22px;font-size:13px">
+                  style="padding:8px 22px;font-size:13px"
+                  data-tooltip="Evaluate all selected models on the held-out test set and generate a full comparison: accuracy, F1 scores, confusion matrices, per-class metrics, and inference timing.">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
                  fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
             Run Benchmark
@@ -621,7 +683,8 @@
 
         <!-- Summary table -->
         <div class="chart-card">
-          <div class="chart-title">
+          <div class="chart-title"
+               data-tooltip="Side-by-side comparison of all benchmarked models: accuracy, loss, F1, precision, recall, parameter count, and inference speed.">
             <div class="chart-title-dot" style="background:#818cf8"></div>
             Benchmark Summary
             <span id="bm-test-info" style="font-size:11px;color:#475569;text-transform:none;letter-spacing:0;font-weight:400;margin-left:8px"></span>
@@ -632,14 +695,16 @@
         <!-- Accuracy + Inference Time -->
         <div class="charts-grid">
           <div class="chart-card">
-            <div class="chart-title">
+            <div class="chart-title"
+                 data-tooltip="Overall classification accuracy of each model on the held-out test set. Higher is better.">
               <div class="chart-title-dot" style="background:#4ade80"></div>
               Overall Accuracy
             </div>
             <div class="chart-wrap" style="height:220px"><canvas id="bm-chart-acc"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">
+            <div class="chart-title"
+                 data-tooltip="Time in milliseconds to classify one 1024-sample signal window. Lower is better for real-time deployment on edge devices.">
               <div class="chart-title-dot" style="background:#f87171"></div>
               Inference Time (ms)
             </div>
@@ -650,14 +715,16 @@
         <!-- Radar + Per-class Accuracy -->
         <div class="charts-grid">
           <div class="chart-card">
-            <div class="chart-title">
+            <div class="chart-title"
+                 data-tooltip="Spider/radar chart overlaying four metrics per model: Accuracy, Avg F1, Avg Precision, Avg Recall. A model covering more area is better across all dimensions.">
               <div class="chart-title-dot" style="background:#38bdf8"></div>
               Multi-Metric Radar
             </div>
             <div class="chart-wrap" style="height:300px"><canvas id="bm-chart-radar"></canvas></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">
+            <div class="chart-title"
+                 data-tooltip="Accuracy broken down by fault class (Normal, Inner Race, Outer Race, Ball) for each model. Reveals which fault types are harder to detect.">
               <div class="chart-title-dot" style="background:#fbbf24"></div>
               Per-Class Accuracy
             </div>
@@ -667,7 +734,8 @@
 
         <!-- Per-class F1 -->
         <div class="chart-card">
-          <div class="chart-title">
+          <div class="chart-title"
+               data-tooltip="F1 score (harmonic mean of precision and recall) for each fault class and model. More robust than accuracy when class sizes are unequal.">
             <div class="chart-title-dot" style="background:#a78bfa"></div>
             Per-Class F1 Score
           </div>
@@ -676,7 +744,8 @@
 
         <!-- Confusion matrices (one per model, in a responsive grid) -->
         <div class="chart-card">
-          <div class="chart-title">
+          <div class="chart-title"
+               data-tooltip="One confusion matrix per model. Each row is a true class; each column is a predicted class. Diagonal = correct. Off-diagonal reveals systematic misclassifications.">
             <div class="chart-title-dot" style="background:#34d399"></div>
             Confusion Matrices
           </div>
@@ -764,8 +833,82 @@
 
 </div><!-- /#chat-panel -->
 
+<!-- Tooltip box (shared singleton, positioned by JS) -->
+<div id="fl-tooltip"></div>
+
 <!-- Scripts -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="/static/js/app.js" defer></script>
+<script src="/static/js/report.js" defer></script>
+
+<!-- Tooltip controller -->
+<script>
+(function () {
+  var box   = document.getElementById('fl-tooltip');
+  var timer = null;
+  var cx    = 0;   /* cursor X at the moment the timer fires */
+  var cy    = 0;   /* cursor Y at the moment the timer fires */
+
+  /* Always keep fresh cursor coordinates */
+  document.addEventListener('mousemove', function (e) {
+    cx = e.clientX;
+    cy = e.clientY;
+  });
+
+  function show(text) {
+    box.textContent = text;
+
+    var bw = box.offsetWidth;
+    var bh = box.offsetHeight;
+    var m  = 12;
+
+    /* Place ABOVE the cursor, horizontally centred on it */
+    var top  = cy - bh - m;
+    var left = cx - Math.round(bw / 2);
+
+    /* Not enough room above → place BELOW the cursor */
+    if (top < m) {
+      top = cy + 24;   /* 24 px clears the cursor arrow */
+    }
+
+    /* Clamp so the box never exits the viewport */
+    if (left + bw > window.innerWidth  - m) left = window.innerWidth  - bw - m;
+    if (left < m)                           left = m;
+    if (top  + bh > window.innerHeight - m) top  = window.innerHeight - bh - m;
+    if (top  < m)                           top  = m;
+
+    box.style.left = left + 'px';
+    box.style.top  = top  + 'px';
+    box.classList.add('tt-visible');
+  }
+
+  function hide() {
+    clearTimeout(timer);
+    box.classList.remove('tt-visible');
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var el   = e.target.closest('[data-tooltip]');
+    var prev = e.relatedTarget ? e.relatedTarget.closest('[data-tooltip]') : null;
+    if (el === prev) return;   /* still inside the same target */
+
+    hide();
+
+    if (el) {
+      var text = el.getAttribute('data-tooltip');
+      timer = setTimeout(function () { show(text); }, 600);
+    }
+  });
+
+  document.addEventListener('mouseout', function (e) {
+    var el   = e.target.closest('[data-tooltip]');
+    var next = e.relatedTarget ? e.relatedTarget.closest('[data-tooltip]') : null;
+    if (el === next) return;   /* still inside the same target */
+    hide();
+  });
+})();
+</script>
 </body>
 </html>

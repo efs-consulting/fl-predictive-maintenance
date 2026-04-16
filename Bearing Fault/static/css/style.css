@@ -1461,3 +1461,29 @@ tbody td:first-child { color: #e2e8f0; font-weight: 600; }
   font-family: 'JetBrains Mono', monospace;
   font-size: 11.5px;
 }
+
+/* ── Tooltip ────────────────────────────────────────────── */
+#fl-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  max-width: 280px;
+  background: #1e293b;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  padding: 9px 13px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #cbd5e1;
+  pointer-events: none;
+  /* visibility:hidden keeps the element in layout so offsetWidth/Height are always measurable */
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.45);
+}
+#fl-tooltip.tt-visible {
+  visibility: visible;
+  opacity: 1;
+}

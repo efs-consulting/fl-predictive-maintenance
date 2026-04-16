@@ -28,6 +28,10 @@ const STATE = {
   charts: {},
   reconnectTimer: null,
   latestModelId: null,   // set when training completes → used to auto-select in Predict tab
+  lastConfusionMatrix: null,   // { cm: [[...]], classNames: [...] }
+  lastPredictionData:  null,   // full API response from /api/predict
+  lastBenchmarkData:   null,   // full API response from /api/benchmark
+  lastTrainingConfig:  null,   // snapshot of config at training start
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -291,6 +295,7 @@ function handleTrainingComplete(data) {
   renderConfusionMatrix(data.confusion_matrix, data.class_names);
   document.getElementById('stat-best').textContent = (data.best_accuracy * 100).toFixed(1) + '%';
   STATE.latestModelId = data.model_id;
+  STATE.lastConfusionMatrix = { cm: data.confusion_matrix, classNames: data.class_names };
   loadModelLibrary();   // always refresh so new model is ready in Predict tab
   _showTrainedBanner(data.model_id, data.best_accuracy);
 }
@@ -463,6 +468,7 @@ function collectConfig() {
 // ──────────────────────────────────────────────────────────────────────────────
 async function startTraining() {
   if (STATE.isTraining) return;
+  STATE.lastTrainingConfig = collectConfig();
   resetCharts();
   STATE.isTraining = true;
   setTrainingUI(true);
@@ -901,6 +907,7 @@ function _windowBreakdown(results) {
 }
 
 function renderPredictionResults(data) {
+  STATE.lastPredictionData = data;
   const displayEl = document.getElementById('result-display');
   const emptyEl   = document.getElementById('result-empty');
   emptyEl.style.display   = 'none';
@@ -1134,6 +1141,7 @@ function _fmtParams(n) {
 function _avg(arr) { return arr.reduce((a,b)=>a+b,0) / arr.length; }
 
 function _renderBenchmarkResults(data) {
+  STATE.lastBenchmarkData = data;
   const models     = data.models;
   const classNames = data.class_names;
   const colors     = CLIENT_COLORS;
