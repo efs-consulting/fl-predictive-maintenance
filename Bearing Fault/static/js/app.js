@@ -19,6 +19,62 @@ const CM_BG_HIGH = '#6366f1';
 // ──────────────────────────────────────────────────────────────────────────────
 //  State
 // ──────────────────────────────────────────────────────────────────────────────
+// ── Session history — MUST be defined before STATE so _sessionLoad() can run ──
+// Uses localStorage so data persists across page navigations, tab closes, and browser restarts.
+const _SESSION_KEY = 'bearingfl_session';
+
+function _sessionLoad() {
+  try {
+    const raw = localStorage.getItem(_SESSION_KEY);
+    if (!raw) throw new Error('empty');
+    const s = JSON.parse(raw);
+    s.trainingRuns  = Array.isArray(s.trainingRuns)  ? s.trainingRuns  : [];
+    s.predictions   = Array.isArray(s.predictions)   ? s.predictions   : [];
+    s.benchmarkRuns = Array.isArray(s.benchmarkRuns) ? s.benchmarkRuns : [];
+    // Keep _currentRun as-is so WebSocket handlers on any page can continue
+    // appending round data and finalising it on TRAINING_COMPLETE.
+    // Interrupted-run recovery happens in startTraining() instead.
+    if (s._currentRun && !Array.isArray(s._currentRun.rounds)) s._currentRun.rounds = [];
+    const inProgress = s._currentRun ? `_currentRun: ${s._currentRun.rounds.length} rounds` : 'no active run';
+    console.log(`BearingFL: session loaded — ${s.trainingRuns.length} runs, ${s.predictions.length} predictions, ${s.benchmarkRuns.length} benchmarks, ${inProgress}`);
+    return s;
+  } catch (e) {}
+  console.log('BearingFL: starting fresh session');
+  return { startTime: new Date().toISOString(), trainingRuns: [], predictions: [], benchmarkRuns: [], _currentRun: null };
+}
+
+function _sessionSave() {
+  try {
+    const payload = {
+      startTime:    STATE.session.startTime,
+      trainingRuns: STATE.session.trainingRuns,
+      predictions:  STATE.session.predictions,
+      benchmarkRuns: STATE.session.benchmarkRuns,
+      _currentRun:  STATE.session._currentRun || null,
+    };
+    localStorage.setItem(_SESSION_KEY, JSON.stringify(payload));
+    console.log(`BearingFL: session saved — ${payload.trainingRuns.length} runs, ${payload.predictions.length} preds, ${payload.benchmarkRuns.length} benchmarks`);
+    _updateSessionBadge();
+  } catch (e) { console.warn('BearingFL: session save failed', e); }
+}
+
+function _updateSessionBadge() {
+  try {
+    const s = STATE.session;
+    const runs  = s.trainingRuns.length + (s._currentRun ? 1 : 0);
+    const preds = s.predictions.length;
+    const bms   = s.benchmarkRuns.length;
+    const parts = [];
+    if (runs  > 0) parts.push(`${runs} run${runs  !== 1 ? 's' : ''}`);
+    if (preds > 0) parts.push(`${preds} pred${preds !== 1 ? 's' : ''}`);
+    if (bms   > 0) parts.push(`${bms} bench${bms   !== 1 ? 'marks' : 'mark'}`);
+    const summary = parts.length ? parts.join(', ') : 'empty session';
+    document.querySelectorAll('#btn-report').forEach(btn => {
+      btn.title = `Generate PDF Report — ${summary}`;
+    });
+  } catch (e) { /* never crash */ }
+}
+
 const STATE = {
   ws: null,
   isTraining: false,
@@ -27,11 +83,12 @@ const STATE = {
   bestAcc: 0,
   charts: {},
   reconnectTimer: null,
-  latestModelId: null,   // set when training completes → used to auto-select in Predict tab
-  lastConfusionMatrix: null,   // { cm: [[...]], classNames: [...] }
-  lastPredictionData:  null,   // full API response from /api/predict
-  lastBenchmarkData:   null,   // full API response from /api/benchmark
-  lastTrainingConfig:  null,   // snapshot of config at training start
+  latestModelId: null,
+  lastConfusionMatrix: null,
+  lastPredictionData:  null,
+  lastBenchmarkData:   null,
+  lastTrainingConfig:  null,
+  session: _sessionLoad(),  // loads from localStorage — helpers defined above
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -63,6 +120,8 @@ function initCharts() {
     pointHoverRadius: 5,
     fill: false,
   };
+
+  if (!document.getElementById('chart-loss')) return;
 
   // Loss chart
   STATE.charts.loss = new Chart(document.getElementById('chart-loss'), {
@@ -213,9 +272,10 @@ function handleMessage(data) {
 }
 
 function handleDataDistribution(data) {
+  if (STATE.session._currentRun) STATE.session._currentRun.dataDistribution = data;
   const chart = STATE.charts.dist;
+  if (!chart) return;   // not on training page
   chart.data.labels = data.clients.map(c => `C${c.client_id}`);
-
   CLASS_NAMES.forEach((_, cls) => {
     chart.data.datasets[cls].data = data.clients.map(c => c.class_counts[String(cls)] || 0);
   });
@@ -224,29 +284,41 @@ function handleDataDistribution(data) {
 
 function handleRoundStart(data) {
   STATE.numRounds = data.num_rounds;
-  document.getElementById('prog-tot').textContent = data.num_rounds;
+  const el = document.getElementById('prog-tot');
+  if (el) el.textContent = data.num_rounds;
 }
 
 function handleRoundComplete(data) {
+  // ── 1. Update session state ────────────────────────────────────────────────
+  const acc = data.global.accuracy;
+  if (acc > STATE.bestAcc) {
+    STATE.bestAcc = acc;
+    if (STATE.session._currentRun) STATE.session._currentRun.bestAcc = acc;
+  }
+  if (STATE.session._currentRun) {
+    STATE.session._currentRun.rounds.push({ round: data.round, loss: data.global.loss, acc });
+    STATE.session._currentRun.finalLoss = data.global.loss;
+    STATE.session._currentRun.clientMetricsFinal = data.clients;
+  }
   STATE.currentRound = data.round;
+  // Save NOW — before any DOM/chart access that may throw on non-training pages
+  _sessionSave();
+
+  // ── 2. Chart + DOM updates (training page only) ────────────────────────────
   const { loss: lossChart, acc: accChart, clients: clientChart } = STATE.charts;
+  if (!lossChart) return;   // not on training page — session already saved above
+
   const lbl = String(data.round);
 
-  // Loss
   lossChart.data.labels.push(lbl);
   lossChart.data.datasets[0].data.push(data.global.loss);
   lossChart.update('none');
 
-  // Accuracy
-  const acc = data.global.accuracy;
-  if (acc > STATE.bestAcc) STATE.bestAcc = acc;
   accChart.data.labels.push(lbl);
   accChart.data.datasets[0].data.push(acc);
-  // Extend best-line
   accChart.data.datasets[1].data = accChart.data.labels.map(() => STATE.bestAcc);
   accChart.update('none');
 
-  // Per-client chart — ensure dataset exists for each client
   data.clients.forEach(c => {
     let ds = clientChart.data.datasets.find(d => d.clientId === c.client_id);
     if (!ds) {
@@ -266,18 +338,15 @@ function handleRoundComplete(data) {
       };
       clientChart.data.datasets.push(ds);
     }
-    // Align to current round
     while (ds.data.length < data.round - 1) ds.data.push(null);
     ds.data.push(c.val_acc);
   });
-  // Fill null for non-selected clients this round
   clientChart.data.datasets.forEach(ds => {
     while (ds.data.length < data.round) ds.data.push(null);
   });
   if (clientChart.data.labels.length < data.round) clientChart.data.labels.push(lbl);
   clientChart.update('none');
 
-  // Progress bar
   const pct = (data.round / data.num_rounds * 100).toFixed(1);
   document.getElementById('progress-fill').style.width = pct + '%';
   document.getElementById('prog-cur').textContent = data.round;
@@ -285,18 +354,29 @@ function handleRoundComplete(data) {
   document.getElementById('stat-loss').textContent = data.global.loss.toFixed(4);
   document.getElementById('stat-best').textContent = (STATE.bestAcc * 100).toFixed(1) + '%';
 
-  // Client table
   updateClientTable(data.clients, data.selected_clients);
 }
 
 function handleTrainingComplete(data) {
   STATE.isTraining = false;
+  STATE.latestModelId = data.model_id;
+  STATE.lastConfusionMatrix = { cm: data.confusion_matrix, classNames: data.class_names };
+  // ── Finalise session run FIRST — before any DOM access that may throw ──────
+  if (STATE.session._currentRun) {
+    STATE.session._currentRun.modelId        = data.model_id;
+    STATE.session._currentRun.bestAcc        = data.best_accuracy;
+    STATE.session._currentRun.confusionMatrix = { cm: data.confusion_matrix, classNames: data.class_names };
+    STATE.session.trainingRuns.push(STATE.session._currentRun);
+    STATE.session._currentRun = null;
+    _sessionSave();
+  }
+  // ── DOM updates (training page only) ──────────────────────────────────────
+  const onTraining = !!document.getElementById('chart-loss');
+  if (!onTraining) return;
   setTrainingUI(false);
   renderConfusionMatrix(data.confusion_matrix, data.class_names);
   document.getElementById('stat-best').textContent = (data.best_accuracy * 100).toFixed(1) + '%';
-  STATE.latestModelId = data.model_id;
-  STATE.lastConfusionMatrix = { cm: data.confusion_matrix, classNames: data.class_names };
-  loadModelLibrary();   // always refresh so new model is ready in Predict tab
+  loadModelLibrary();
   _showTrainedBanner(data.model_id, data.best_accuracy);
 }
 
@@ -320,7 +400,7 @@ function _showTrainedBanner(modelId, bestAcc) {
 
 function handleTrainingError(data) {
   STATE.isTraining = false;
-  setTrainingUI(false);
+  if (document.getElementById('chart-loss')) setTrainingUI(false);
   appendLog('ERROR', data.message, '');
 }
 
@@ -414,6 +494,7 @@ function renderConfusionMatrix(cm, classNames, targetEl) {
 // ──────────────────────────────────────────────────────────────────────────────
 function appendLog(level, message, ts) {
   const console_ = document.getElementById('log-console');
+  if (!console_) return;
   const line = document.createElement('div');
   line.className = 'log-line';
   line.innerHTML = `
@@ -468,7 +549,24 @@ function collectConfig() {
 // ──────────────────────────────────────────────────────────────────────────────
 async function startTraining() {
   if (STATE.isTraining) return;
+  // If there is a leftover run from a previous navigation (mid-training), archive it now
+  if (STATE.session._currentRun && STATE.session._currentRun.rounds.length > 0) {
+    STATE.session._currentRun.interrupted = true;
+    STATE.session.trainingRuns.push(STATE.session._currentRun);
+    _sessionSave();
+  }
   STATE.lastTrainingConfig = collectConfig();
+  STATE.session._currentRun = {
+    timestamp: new Date().toISOString(),
+    config: collectConfig(),
+    rounds: [],
+    bestAcc: 0,
+    finalLoss: null,
+    modelId: null,
+    confusionMatrix: null,
+    dataDistribution: null,
+    clientMetricsFinal: null,
+  };
   resetCharts();
   STATE.isTraining = true;
   setTrainingUI(true);
@@ -518,7 +616,9 @@ function setConnBadge(state, text) {
 }
 
 function toggleSidebar() {
-  document.getElementById('app').classList.toggle('sidebar-collapsed');
+  // Repurposed: toggles the FL config drawer in the new three-panel layout
+  const el = document.getElementById('fl-config');
+  if (el) el.classList.toggle('config-open');
 }
 
 function toggleSection(header) {
@@ -531,18 +631,21 @@ function toggleSection(header) {
 }
 
 function toggleAlpha() {
-  const strat = document.getElementById('partition_strategy').value;
-  document.getElementById('field-alpha').classList.toggle('field-hidden', strat !== 'dirichlet');
+  const el = document.getElementById('partition_strategy');
+  if (!el) return;
+  document.getElementById('field-alpha').classList.toggle('field-hidden', el.value !== 'dirichlet');
 }
 
 function toggleMu() {
-  const strat = document.getElementById('aggregation_strategy').value;
-  document.getElementById('field-mu').classList.toggle('field-hidden', strat !== 'fedprox');
+  const el = document.getElementById('aggregation_strategy');
+  if (!el) return;
+  document.getElementById('field-mu').classList.toggle('field-hidden', el.value !== 'fedprox');
 }
 
 function toggleAugmentation() {
-  const on = document.getElementById('use_augmentation').checked;
-  document.getElementById('field-aug-noise').classList.toggle('field-hidden', !on);
+  const el = document.getElementById('use_augmentation');
+  if (!el) return;
+  document.getElementById('field-aug-noise').classList.toggle('field-hidden', !el.checked);
 }
 
 function resetUI() {
@@ -554,12 +657,12 @@ function resetUI() {
 //  Tab switching
 // ──────────────────────────────────────────────────────────────────────────────
 function switchTab(name) {
-  ['dashboard','predict','benchmark'].forEach(t => {
-    document.getElementById(`panel-${t}`).style.display = name === t ? '' : 'none';
-    document.getElementById(`tab-${t}`).classList.toggle('active', name === t);
-  });
-  if (name === 'predict')   loadModelLibrary();
-  if (name === 'benchmark') loadBenchmarkLibrary();
+  const pageMap = {
+    dashboard: '/static/training.html',
+    predict:   '/static/prediction.html',
+    benchmark: '/static/benchmark.html',
+  };
+  if (pageMap[name]) window.location.href = pageMap[name];
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -908,6 +1011,18 @@ function _windowBreakdown(results) {
 
 function renderPredictionResults(data) {
   STATE.lastPredictionData = data;
+  // Record to session history and persist
+  STATE.session.predictions.push({
+    timestamp: new Date().toISOString(),
+    inputSource: STATE.pendingFile
+      ? STATE.pendingFile.name
+      : STATE.sampleTrueLabel
+        ? 'Sample: ' + STATE.sampleTrueLabel.name
+        : 'Manual input',
+    trueLabel: STATE.sampleTrueLabel ? { ...STATE.sampleTrueLabel } : null,
+    result: data,
+  });
+  _sessionSave();
   const displayEl = document.getElementById('result-display');
   const emptyEl   = document.getElementById('result-empty');
   emptyEl.style.display   = 'none';
@@ -1142,6 +1257,9 @@ function _avg(arr) { return arr.reduce((a,b)=>a+b,0) / arr.length; }
 
 function _renderBenchmarkResults(data) {
   STATE.lastBenchmarkData = data;
+  // Record to session history and persist
+  STATE.session.benchmarkRuns.push({ timestamp: new Date().toISOString(), result: data });
+  _sessionSave();
   const models     = data.models;
   const classNames = data.class_names;
   const colors     = CLIENT_COLORS;
@@ -1340,14 +1458,24 @@ function _renderBenchmarkResults(data) {
 //  Boot
 // ──────────────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  initCharts();
+  const onTraining  = !!document.getElementById('chart-loss');
+  const onPredict   = !!document.getElementById('model-list');
+  const onBenchmark = !!document.getElementById('bm-model-list');
+
   connectWebSocket();
-  toggleAlpha();
-  toggleMu();
-  toggleAugmentation();
-  STATE.pendingFile = null;
-  STATE.sampleTrueLabel = null;
-  appendLog('INFO', 'Dashboard loaded. Configure settings and press Start Training.', new Date().toTimeString().slice(0,8));
+  _updateSessionBadge();
+
+  if (onTraining) {
+    initCharts();
+    toggleAlpha();
+    toggleMu();
+    toggleAugmentation();
+    STATE.pendingFile = null;
+    STATE.sampleTrueLabel = null;
+    appendLog('INFO', 'Dashboard loaded. Configure settings and press Start Training.', new Date().toTimeString().slice(0,8));
+  }
+  if (onPredict)   loadModelLibrary();
+  if (onBenchmark) loadBenchmarkLibrary();
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -1441,6 +1569,85 @@ function _chatScrollBottom() {
   if (el) el.scrollTop = el.scrollHeight;
 }
 
+function _buildSessionContext() {
+  // Merge live STATE.session with whatever is in localStorage (same as generateReport does)
+  let fresh = null;
+  try { const r = localStorage.getItem(_SESSION_KEY); if (r) fresh = JSON.parse(r); } catch (_) {}
+  const live = (typeof STATE !== 'undefined' && STATE.session) ? STATE.session : null;
+
+  function _longer(a, b) { return (a?.length ?? 0) >= (b?.length ?? 0) ? (a || []) : (b || []); }
+  const runs   = _longer(live?.trainingRuns,  fresh?.trainingRuns);
+  const preds  = _longer(live?.predictions,   fresh?.predictions);
+  const bms    = _longer(live?.benchmarkRuns, fresh?.benchmarkRuns);
+  const cur    = (live?._currentRun?.rounds?.length ?? 0) >= (fresh?._currentRun?.rounds?.length ?? 0)
+                   ? live?._currentRun : fresh?._currentRun;
+  const start  = live?.startTime || fresh?.startTime;
+
+  if (!runs.length && !preds.length && !bms.length && !cur) return '';
+
+  const lines = ['=== CURRENT SESSION DATA ==='];
+  if (start) lines.push(`Session started: ${new Date(start).toLocaleString()}`);
+
+  if (runs.length) {
+    lines.push(`\nTRAINING RUNS (${runs.length} completed):`);
+    runs.forEach((run, i) => {
+      const cfg = run.config || {};
+      const ts  = run.timestamp ? ` (${new Date(run.timestamp).toLocaleTimeString()})` : '';
+      const status = run.interrupted ? ' [interrupted]' : run.incomplete ? ' [in-progress]' : '';
+      lines.push(`Run ${i+1}${ts}${status}: ${cfg.model_type||'?'}, ${cfg.aggregation_strategy||'?'}, ${cfg.num_clients||'?'} clients, ${run.rounds?.length||0}/${cfg.num_rounds||'?'} rounds, Best Acc: ${((run.bestAcc||0)*100).toFixed(1)}%${run.finalLoss!=null?', Final Loss: '+run.finalLoss.toFixed(4):''}`);
+      if (run.modelId) lines.push(`  Model saved: ${run.modelId}`);
+      if (run.confusionMatrix?.cm) {
+        const cm = run.confusionMatrix.cm;
+        const names = run.confusionMatrix.classNames || ['Normal','IR','OR','Ball'];
+        const perClass = names.map((n, i) => {
+          const total = cm[i].reduce((a, b) => a+b, 0);
+          return `${n}: ${total>0?((cm[i][i]/total)*100).toFixed(1)+'%':'—'}`;
+        }).join(', ');
+        lines.push(`  Per-class accuracy — ${perClass}`);
+      }
+      if (run.clientMetricsFinal?.length) {
+        const avgValAcc = run.clientMetricsFinal.reduce((s, c) => s + (c.val_acc||0), 0) / run.clientMetricsFinal.length;
+        lines.push(`  Avg client val acc (final round): ${(avgValAcc*100).toFixed(1)}%, clients: ${run.clientMetricsFinal.length}`);
+      }
+    });
+  }
+
+  if (cur?.rounds?.length > 0) {
+    const cfg = cur.config || {};
+    const lastRound = cur.rounds[cur.rounds.length - 1];
+    lines.push(`\nIN-PROGRESS TRAINING: ${cfg.model_type||'?'}, ${cfg.aggregation_strategy||'?'}, round ${lastRound.round}/${cfg.num_rounds||'?'}, Acc: ${((lastRound.acc||0)*100).toFixed(1)}%, Loss: ${(lastRound.loss||0).toFixed(4)}`);
+  }
+
+  if (preds.length) {
+    lines.push(`\nPREDICTIONS (${preds.length} total):`);
+    preds.forEach((p, i) => {
+      const ens  = p.result?.ensemble;
+      const ts   = p.timestamp ? ` (${new Date(p.timestamp).toLocaleTimeString()})` : '';
+      const src  = p.source || p.inputSource || 'input';
+      const true_ = p.trueLabel ? ` | True: ${p.trueLabel.name}` : '';
+      const conf = ens?.probabilities?.[ens?.class_name];
+      const models = p.result?.predictions?.length || 1;
+      lines.push(`Pred ${i+1}${ts}: ${src}${true_} → ${ens?.class_name||'?'} (${conf!=null?(conf*100).toFixed(1)+'% conf':'N/A'}), ${models} model${models!==1?'s':''}`);
+    });
+  }
+
+  if (bms.length) {
+    lines.push(`\nBENCHMARKS (${bms.length} run${bms.length!==1?'s':''}):`);
+    bms.forEach((bm, i) => {
+      const ts = bm.timestamp ? ` (${new Date(bm.timestamp).toLocaleTimeString()})` : '';
+      const d  = bm.result || {};
+      lines.push(`Benchmark ${i+1}${ts} — ${(d.test_samples||0).toLocaleString()} test samples:`);
+      (d.models || []).forEach(m => {
+        const f1avg = m.per_class_f1?.length ? (m.per_class_f1.reduce((a,b)=>a+b,0)/m.per_class_f1.length*100).toFixed(1)+'%' : '—';
+        lines.push(`  ${m.label||m.short_label||'?'}: Acc ${m.accuracy!=null?(m.accuracy*100).toFixed(1)+'%':'—'}, Avg F1 ${f1avg}, Params ${m.num_params||'?'}`);
+      });
+    });
+  }
+
+  lines.push('=== END SESSION DATA ===');
+  return lines.join('\n');
+}
+
 async function sendChat() {
   const input = document.getElementById('chat-input');
   const text  = input.value.trim();
@@ -1461,8 +1668,9 @@ async function sendChat() {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
-        message: text,
-        history: CHAT.history.slice(-10),
+        message:         text,
+        history:         CHAT.history.slice(-10),
+        session_context: _buildSessionContext(),
       }),
     });
     _chatHideTyping();

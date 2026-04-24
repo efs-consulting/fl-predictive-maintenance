@@ -8,6 +8,8 @@ import pathlib
 from contextlib import asynccontextmanager
 from typing import List, Set
 
+import httpx
+
 import numpy as np
 import torch
 from fastapi import FastAPI, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -469,34 +471,117 @@ class ChatMsg(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     history: List[ChatMsg] = []
+    session_context: str = ""   # compact session summary built by the frontend
 
 
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatRequest):
+    """
+    Chat routing (priority order):
+
+    1. LM Studio at llm.taktik.net — OpenAI-compatible streaming endpoint.
+       Uses stream=True to satisfy Cloudflare's 100 s idle-timeout; SSE chunks
+       are accumulated on the backend and returned as a single JSON reply.
+
+    2. Anthropic Claude API — fallback when the primary is unreachable.
+
+    3. Friendly error message — if neither backend is available.
+    """
+    lm_base_url = os.environ.get("LM_STUDIO_BASE_URL", "").rstrip("/")
+    lm_api_key  = os.environ.get("LM_STUDIO_API_KEY",  "").strip()
+
+    # Build the full system prompt: static knowledge + live session data
+    system_content = _CHAT_SYSTEM
+    if payload.session_context.strip():
+        system_content += "\n\n" + payload.session_context.strip()
+
+    messages = [{"role": "system", "content": system_content}]
+    for m in payload.history[-10:]:
+        messages.append({"role": m.role, "content": m.content})
+    messages.append({"role": "user", "content": payload.message})
+
+    # ── Primary: LM Studio / llm.taktik.net (OpenAI-compatible, streaming) ───
+    if lm_base_url and lm_api_key:
+        try:
+            headers = {
+                "Authorization": f"Bearer {lm_api_key}",
+                "Content-Type":  "application/json",
+                "Accept":        "text/event-stream",
+            }
+            body = {
+                "model":       "google/gemma-4-26b-a4b",
+                "messages":    messages,
+                "stream":      True,          # REQUIRED — resets CF 100 s idle timer per chunk
+                "max_tokens":  600,
+                "temperature": 0.7,
+            }
+
+            reply_chunks: list[str] = []
+
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{lm_base_url}/chat/completions",
+                    headers=headers,
+                    json=body,
+                ) as resp:
+                    # Read error body while connection is still open
+                    if resp.status_code >= 400:
+                        await resp.aread()
+                        err_body = resp.text
+                        logger.error("LM Studio HTTP %s: %s", resp.status_code, err_body)
+                        raise HTTPException(status_code=resp.status_code, detail=err_body)
+
+                    async for raw_line in resp.aiter_lines():
+                        if not raw_line.startswith("data: "):
+                            continue
+                        payload_str = raw_line[6:].strip()
+                        if payload_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload_str)
+                            delta = chunk["choices"][0]["delta"].get("content", "")
+                            if delta:
+                                reply_chunks.append(delta)
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            pass
+
+            return {"reply": "".join(reply_chunks)}
+        except httpx.ConnectError as exc:
+            logger.error("LM Studio unreachable: %s", exc)
+            raise HTTPException(status_code=502, detail=f"LM Studio unreachable: {exc}")
+        except httpx.TimeoutException as exc:
+            logger.error("LM Studio timeout: %s", exc)
+            raise HTTPException(status_code=504, detail=f"LM Studio timed out: {exc}")
+        except Exception as exc:
+            logger.error("LM Studio error: %s", exc)
+            raise HTTPException(status_code=500, detail=f"LM Studio error: {exc}")
+
+    # ── Fallback: Anthropic Claude API ────────────────────────────────────────
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        return {
-            "reply": (
-                "**API key not configured.**\n"
-                "Set the `ANTHROPIC_API_KEY` environment variable and restart the server "
-                "to enable the AI assistant."
+    if api_key:
+        try:
+            import anthropic
+            client   = anthropic.Anthropic(api_key=api_key)
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=600,
+                system=system_content,
+                messages=messages[1:],   # strip the system message (passed separately)
             )
-        }
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        history = [{"role": m.role, "content": m.content}
-                   for m in payload.history[-10:]]
-        history.append({"role": "user", "content": payload.message})
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=600,
-            system=_CHAT_SYSTEM,
-            messages=history,
+            return {"reply": response.content[0].text}
+        except Exception as exc:
+            logger.error("Anthropic fallback failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+
+    # ── No backend available ──────────────────────────────────────────────────
+    return {
+        "reply": (
+            "**AI assistant not configured.**\n\n"
+            "Set `LM_STUDIO_BASE_URL` and `LM_STUDIO_API_KEY` in your `.env` file "
+            "to enable the AI chat feature."
         )
-        return {"reply": response.content[0].text}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    }
 
 
 # ── Static files + SPA fallback ───────────────────────────────────────────────

@@ -12,7 +12,8 @@
       "Bash(mv \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/y.npy\" \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/data/\")",
       "Bash(mv \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/meta.csv\" \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/data/\")",
       "Bash(python -c ':*)",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(python3 *)"
     ]
   }
 }
