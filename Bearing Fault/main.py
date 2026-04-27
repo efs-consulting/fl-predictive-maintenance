@@ -508,15 +508,18 @@ async def chat_endpoint(payload: ChatRequest):
                 "Content-Type":  "application/json",
                 "Accept":        "text/event-stream",
             }
+            model_id = os.environ.get("LM_STUDIO_MODEL", "google/gemma-4-26b-a4b").strip()
             body = {
-                "model":       "google/gemma-4-26b-a4b",
-                "messages":    messages,
-                "stream":      True,          # REQUIRED — resets CF 100 s idle timer per chunk
-                "max_tokens":  600,
-                "temperature": 0.7,
+                "model":           model_id,
+                "messages":        messages,
+                "stream":          True,   # REQUIRED — resets CF 100 s idle timer per chunk
+                "max_tokens":      2500,   # reasoning models need room for <think> + actual reply
+                "temperature":     0.7,
+                "enable_thinking": False,  # disable chain-of-thought for reasoning models
             }
 
             reply_chunks: list[str] = []
+            reasoning_chunks: list[str] = []
 
             async with httpx.AsyncClient(timeout=300.0) as client:
                 async with client.stream(
@@ -540,13 +543,22 @@ async def chat_endpoint(payload: ChatRequest):
                             break
                         try:
                             chunk = json.loads(payload_str)
-                            delta = chunk["choices"][0]["delta"].get("content", "")
-                            if delta:
-                                reply_chunks.append(delta)
+                            delta = chunk["choices"][0]["delta"]
+                            # reasoning models stream thinking in "reasoning_content";
+                            # the final answer arrives in "content"
+                            content   = delta.get("content", "")
+                            reasoning = delta.get("reasoning_content", "")
+                            if content:
+                                reply_chunks.append(content)
+                            elif reasoning:
+                                reasoning_chunks.append(reasoning)
                         except (json.JSONDecodeError, KeyError, IndexError):
                             pass
 
-            return {"reply": "".join(reply_chunks)}
+            # Prefer the actual answer; fall back to reasoning output when
+            # enable_thinking had no effect and no separate content was produced
+            reply = "".join(reply_chunks) or "".join(reasoning_chunks)
+            return {"reply": reply}
         except httpx.ConnectError as exc:
             logger.error("LM Studio unreachable: %s", exc)
             raise HTTPException(status_code=502, detail=f"LM Studio unreachable: {exc}")
@@ -565,7 +577,7 @@ async def chat_endpoint(payload: ChatRequest):
             client   = anthropic.Anthropic(api_key=api_key)
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=600,
+                max_tokens=1024,
                 system=system_content,
                 messages=messages[1:],   # strip the system message (passed separately)
             )

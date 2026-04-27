@@ -605,7 +605,7 @@
   </div>
 </footer>
 
-<div id="fl-tooltip"></div>
+<div id="fl-tooltip"><div id="fl-tooltip-arrow"></div></div>
 
 <!-- User Manual modal -->
 <div id="manual-overlay" onclick="closeManual()"></div>
@@ -665,42 +665,9 @@
 <script src="/static/js/report.js" defer></script>
 <script src="/static/js/guide.js" defer></script>
 <script src="/static/js/manual.js" defer></script>
+<script src="/static/js/tooltip.js" defer></script>
 
 <script>
-/* ── Tooltip ─────────────────────────────────────── */
-(function () {
-  var box = document.getElementById('fl-tooltip');
-  var timer = null, cx = 0, cy = 0;
-  document.addEventListener('mousemove', function(e) { cx = e.clientX; cy = e.clientY; });
-  function show(text) {
-    box.textContent = text;
-    var bw = box.offsetWidth, bh = box.offsetHeight, m = 12;
-    var top = cy - bh - m, left = cx - Math.round(bw / 2);
-    if (top < m) top = cy + 24;
-    if (left + bw > window.innerWidth  - m) left = window.innerWidth  - bw - m;
-    if (left < m) left = m;
-    if (top + bh > window.innerHeight - m) top = window.innerHeight - bh - m;
-    if (top < m) top = m;
-    box.style.left = left + 'px';
-    box.style.top  = top  + 'px';
-    box.classList.add('tt-visible');
-  }
-  function hide() { clearTimeout(timer); box.classList.remove('tt-visible'); }
-  document.addEventListener('mouseover', function(e) {
-    var el = e.target.closest('[data-tooltip]');
-    var prev = e.relatedTarget ? e.relatedTarget.closest('[data-tooltip]') : null;
-    if (el === prev) return;
-    hide();
-    if (el) { var t = el.getAttribute('data-tooltip'); timer = setTimeout(function(){ show(t); }, 500); }
-  });
-  document.addEventListener('mouseout', function(e) {
-    var el = e.target.closest('[data-tooltip]');
-    var next = e.relatedTarget ? e.relatedTarget.closest('[data-tooltip]') : null;
-    if (el === next) return;
-    hide();
-  });
-})();
-
 /* ── Config sub-page ─────────────────────────────── */
 function openConfigModal() {
   document.getElementById('config-modal-overlay').classList.add('open');

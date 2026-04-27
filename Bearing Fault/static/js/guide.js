@@ -239,6 +239,10 @@ function _renderGuide() {
       const name = document.createElement('div');
       name.className = 'guide-term-name';
       name.textContent = t.name;
+      // Tooltip: title = term name, body = first sentence of description
+      const firstSentence = (t.desc.match(/^[^.!?]+[.!?]/) || [t.desc])[0];
+      name.setAttribute('data-tooltip-title', t.name);
+      name.setAttribute('data-tooltip', firstSentence);
 
       const desc = document.createElement('div');
       desc.className = 'guide-term-desc';

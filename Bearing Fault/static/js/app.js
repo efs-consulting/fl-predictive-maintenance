@@ -1576,75 +1576,157 @@ function _buildSessionContext() {
   const live = (typeof STATE !== 'undefined' && STATE.session) ? STATE.session : null;
 
   function _longer(a, b) { return (a?.length ?? 0) >= (b?.length ?? 0) ? (a || []) : (b || []); }
-  const runs   = _longer(live?.trainingRuns,  fresh?.trainingRuns);
-  const preds  = _longer(live?.predictions,   fresh?.predictions);
-  const bms    = _longer(live?.benchmarkRuns, fresh?.benchmarkRuns);
-  const cur    = (live?._currentRun?.rounds?.length ?? 0) >= (fresh?._currentRun?.rounds?.length ?? 0)
-                   ? live?._currentRun : fresh?._currentRun;
-  const start  = live?.startTime || fresh?.startTime;
+  function _pct(v)  { return v != null ? (v * 100).toFixed(2) + '%' : '—'; }
+  function _avg(arr){ return arr?.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null; }
+
+  const runs  = _longer(live?.trainingRuns,  fresh?.trainingRuns);
+  const preds = _longer(live?.predictions,   fresh?.predictions);
+  const bms   = _longer(live?.benchmarkRuns, fresh?.benchmarkRuns);
+  const cur   = (live?._currentRun?.rounds?.length ?? 0) >= (fresh?._currentRun?.rounds?.length ?? 0)
+                  ? live?._currentRun : fresh?._currentRun;
+  const start = live?.startTime || fresh?.startTime;
 
   if (!runs.length && !preds.length && !bms.length && !cur) return '';
 
   const lines = ['=== CURRENT SESSION DATA ==='];
   if (start) lines.push(`Session started: ${new Date(start).toLocaleString()}`);
 
+  // ── Completed training runs ─────────────────────────────────────────────────
   if (runs.length) {
     lines.push(`\nTRAINING RUNS (${runs.length} completed):`);
     runs.forEach((run, i) => {
-      const cfg = run.config || {};
-      const ts  = run.timestamp ? ` (${new Date(run.timestamp).toLocaleTimeString()})` : '';
+      const cfg    = run.config || {};
+      const ts     = run.timestamp ? ` (${new Date(run.timestamp).toLocaleTimeString()})` : '';
       const status = run.interrupted ? ' [interrupted]' : run.incomplete ? ' [in-progress]' : '';
-      lines.push(`Run ${i+1}${ts}${status}: ${cfg.model_type||'?'}, ${cfg.aggregation_strategy||'?'}, ${cfg.num_clients||'?'} clients, ${run.rounds?.length||0}/${cfg.num_rounds||'?'} rounds, Best Acc: ${((run.bestAcc||0)*100).toFixed(1)}%${run.finalLoss!=null?', Final Loss: '+run.finalLoss.toFixed(4):''}`);
-      if (run.modelId) lines.push(`  Model saved: ${run.modelId}`);
-      if (run.confusionMatrix?.cm) {
-        const cm = run.confusionMatrix.cm;
-        const names = run.confusionMatrix.classNames || ['Normal','IR','OR','Ball'];
-        const perClass = names.map((n, i) => {
-          const total = cm[i].reduce((a, b) => a+b, 0);
-          return `${n}: ${total>0?((cm[i][i]/total)*100).toFixed(1)+'%':'—'}`;
-        }).join(', ');
-        lines.push(`  Per-class accuracy — ${perClass}`);
+      lines.push(`\nRun ${i+1}${ts}${status}:`);
+
+      // Full FL config
+      lines.push(`  FL config: strategy=${cfg.aggregation_strategy||'?'}, clients=${cfg.num_clients||'?'}, rounds=${run.rounds?.length||0}/${cfg.num_rounds||'?'}, fraction_fit=${cfg.fraction_fit??'?'}${cfg.fedprox_mu!=null&&cfg.aggregation_strategy==='fedprox'?', fedprox_mu='+cfg.fedprox_mu:''}${cfg.early_stopping_patience>0?', early_stop_patience='+cfg.early_stopping_patience:''}`);
+      lines.push(`  Data config: partition=${cfg.partition_strategy||'?'}${cfg.dirichlet_alpha!=null&&cfg.partition_strategy==='dirichlet'?', alpha='+cfg.dirichlet_alpha:''}${cfg.use_augmentation?', augmentation=on (noise_std='+cfg.aug_noise_std+')':''}`);
+      lines.push(`  Model config: model=${cfg.model_type||'?'}, dropout=${cfg.dropout??'?'}`);
+      lines.push(`  Training config: epochs=${cfg.local_epochs||'?'}, batch=${cfg.batch_size||'?'}, lr=${cfg.learning_rate||'?'}, optimizer=${cfg.optimizer||'?'}${cfg.lr_scheduler&&cfg.lr_scheduler!=='none'?', scheduler='+cfg.lr_scheduler:''}${cfg.weight_decay?', weight_decay='+cfg.weight_decay:''}${cfg.grad_clip?', grad_clip='+cfg.grad_clip:''}${cfg.label_smoothing?', label_smoothing='+cfg.label_smoothing:''}${cfg.seed!=null?', seed='+cfg.seed:''}`);
+
+      // Results summary
+      lines.push(`  Results: Best Acc=${_pct(run.bestAcc||0)}${run.finalLoss!=null?', Final Loss='+run.finalLoss.toFixed(4):''}`);
+      if (run.modelId) lines.push(`  Saved model ID: ${run.modelId}`);
+
+      // Training curve (first / best / final)
+      if (run.rounds?.length > 1) {
+        const first = run.rounds[0];
+        const last  = run.rounds[run.rounds.length - 1];
+        const best  = run.rounds.reduce((b, r) => r.acc > b.acc ? r : b, run.rounds[0]);
+        lines.push(`  Training curve: R1 acc=${_pct(first.acc)} loss=${first.loss?.toFixed(4)||'?'} → Best R${best.round} acc=${_pct(best.acc)} → Final R${last.round} acc=${_pct(last.acc)} loss=${last.loss?.toFixed(4)||'?'}`);
       }
+
+      // Per-class accuracy from confusion matrix
+      if (run.confusionMatrix?.cm) {
+        const cm    = run.confusionMatrix.cm;
+        const names = run.confusionMatrix.classNames || ['Normal','IR','OR','Ball'];
+        const pcAcc = names.map((n, j) => {
+          const total = cm[j].reduce((a, b) => a + b, 0);
+          return `${n}: ${total > 0 ? _pct(cm[j][j] / total) : '—'}`;
+        }).join(', ');
+        lines.push(`  Per-class accuracy: ${pcAcc}`);
+
+        // Full confusion matrix (rows = true class, cols = predicted)
+        lines.push(`  Confusion matrix [true→pred, classes: ${names.join('/')}]:`);
+        cm.forEach((row, j) => lines.push(`    ${names[j].padEnd(8)}: [${row.join(', ')}]`));
+      }
+
+      // Client validation accuracy (final round)
       if (run.clientMetricsFinal?.length) {
-        const avgValAcc = run.clientMetricsFinal.reduce((s, c) => s + (c.val_acc||0), 0) / run.clientMetricsFinal.length;
-        lines.push(`  Avg client val acc (final round): ${(avgValAcc*100).toFixed(1)}%, clients: ${run.clientMetricsFinal.length}`);
+        const avg = _avg(run.clientMetricsFinal.map(c => c.val_acc || 0));
+        const details = run.clientMetricsFinal
+          .map((c, j) => `C${j+1}:${_pct(c.val_acc||0)}`)
+          .slice(0, 10).join(' ');
+        lines.push(`  Client val acc (final round): avg=${_pct(avg)}, [${details}${run.clientMetricsFinal.length>10?' …':''}]`);
       }
     });
   }
 
+  // ── In-progress training ────────────────────────────────────────────────────
   if (cur?.rounds?.length > 0) {
-    const cfg = cur.config || {};
-    const lastRound = cur.rounds[cur.rounds.length - 1];
-    lines.push(`\nIN-PROGRESS TRAINING: ${cfg.model_type||'?'}, ${cfg.aggregation_strategy||'?'}, round ${lastRound.round}/${cfg.num_rounds||'?'}, Acc: ${((lastRound.acc||0)*100).toFixed(1)}%, Loss: ${(lastRound.loss||0).toFixed(4)}`);
+    const cfg      = cur.config || {};
+    const last     = cur.rounds[cur.rounds.length - 1];
+    const bestSoFar = cur.rounds.reduce((b, r) => r.acc > b ? r.acc : b, 0);
+    lines.push(`\nIN-PROGRESS TRAINING:`);
+    lines.push(`  Model=${cfg.model_type||'?'}, strategy=${cfg.aggregation_strategy||'?'}, clients=${cfg.num_clients||'?'}`);
+    lines.push(`  Round ${last.round}/${cfg.num_rounds||'?'} — Current Acc=${_pct(last.acc)}, Loss=${last.loss?.toFixed(4)||'?'}, Best so far=${_pct(bestSoFar)}`);
   }
 
+  // ── Predictions ─────────────────────────────────────────────────────────────
   if (preds.length) {
     lines.push(`\nPREDICTIONS (${preds.length} total):`);
     preds.forEach((p, i) => {
-      const ens  = p.result?.ensemble;
-      const ts   = p.timestamp ? ` (${new Date(p.timestamp).toLocaleTimeString()})` : '';
-      const src  = p.source || p.inputSource || 'input';
-      const true_ = p.trueLabel ? ` | True: ${p.trueLabel.name}` : '';
-      const conf = ens?.probabilities?.[ens?.class_name];
-      const models = p.result?.predictions?.length || 1;
-      lines.push(`Pred ${i+1}${ts}: ${src}${true_} → ${ens?.class_name||'?'} (${conf!=null?(conf*100).toFixed(1)+'% conf':'N/A'}), ${models} model${models!==1?'s':''}`);
+      const ens      = p.result?.ensemble;
+      const ts       = p.timestamp ? ` (${new Date(p.timestamp).toLocaleTimeString()})` : '';
+      const src      = p.inputSource || p.source || 'input';
+      const trueLabel = p.trueLabel ? ` | True label: ${p.trueLabel.name}` : '';
+      const nWindows = p.result?.num_windows || '?';
+      const perModel = p.result?.predictions;
+
+      lines.push(`\nPred ${i+1}${ts}: source="${src}"${trueLabel}, windows=${nWindows}, models=${perModel?.length||1}`);
+
+      if (ens) {
+        // Full 4-class probability distribution
+        const probs = ens.probabilities || {};
+        const probStr = Object.entries(probs)
+          .sort((a, b) => b[1] - a[1])
+          .map(([cls, prob]) => `${cls}: ${_pct(prob)}`)
+          .join(', ');
+        lines.push(`  Ensemble → ${ens.class_name} | All probs: ${probStr}`);
+        if (ens.votes && perModel?.length > 1) {
+          const voteStr = Object.entries(ens.votes).map(([cls, v]) => `${cls}:${v}`).join(' ');
+          lines.push(`  Votes: ${voteStr}`);
+        }
+        if (trueLabel) {
+          const correct = ens.class_name === p.trueLabel?.name;
+          lines.push(`  Prediction was: ${correct ? 'CORRECT' : 'WRONG'}`);
+        }
+      }
+
+      // Per-model breakdown when multiple models were used
+      if (perModel?.length > 1) {
+        lines.push('  Per-model predictions:');
+        perModel.forEach(pm => {
+          const topProb = pm.avg_probabilities?.[pm.class_name];
+          lines.push(`    ${pm.model_label||pm.model_id||'Model'}: ${pm.class_name} (${topProb!=null?_pct(topProb):'?'})`);
+        });
+      }
     });
   }
 
+  // ── Benchmark runs ──────────────────────────────────────────────────────────
   if (bms.length) {
     lines.push(`\nBENCHMARKS (${bms.length} run${bms.length!==1?'s':''}):`);
     bms.forEach((bm, i) => {
-      const ts = bm.timestamp ? ` (${new Date(bm.timestamp).toLocaleTimeString()})` : '';
-      const d  = bm.result || {};
-      lines.push(`Benchmark ${i+1}${ts} — ${(d.test_samples||0).toLocaleString()} test samples:`);
+      const ts         = bm.timestamp ? ` (${new Date(bm.timestamp).toLocaleTimeString()})` : '';
+      const d          = bm.result || {};
+      const classNames = d.class_names || ['Normal', 'IR', 'OR', 'Ball'];
+      lines.push(`\nBenchmark ${i+1}${ts} — ${(d.test_samples||0).toLocaleString()} test samples, classes: ${classNames.join('/')}`);
+
       (d.models || []).forEach(m => {
-        const f1avg = m.per_class_f1?.length ? (m.per_class_f1.reduce((a,b)=>a+b,0)/m.per_class_f1.length*100).toFixed(1)+'%' : '—';
-        lines.push(`  ${m.label||m.short_label||'?'}: Acc ${m.accuracy!=null?(m.accuracy*100).toFixed(1)+'%':'—'}, Avg F1 ${f1avg}, Params ${m.num_params||'?'}`);
+        const avgF1  = _avg(m.per_class_f1);
+        const avgPr  = _avg(m.per_class_precision);
+        const avgRe  = _avg(m.per_class_recall);
+        lines.push(`  ${m.label||m.short_label||'?'}: Acc=${_pct(m.accuracy)}, Loss=${m.loss?.toFixed(4)||'—'}, AvgF1=${_pct(avgF1)}, AvgPrec=${_pct(avgPr)}, AvgRec=${_pct(avgRe)}, Params=${m.num_params||'?'}, InferenceTime=${m.inference_time_ms||'?'}ms`);
+
+        // Per-class breakdown
+        if (m.per_class_accuracy?.length) {
+          lines.push(`    Per-class Acc:  ${classNames.map((n,j) => `${n}:${_pct(m.per_class_accuracy[j])}`).join(', ')}`);
+        }
+        if (m.per_class_f1?.length) {
+          lines.push(`    Per-class F1:   ${classNames.map((n,j) => `${n}:${_pct(m.per_class_f1[j])}`).join(', ')}`);
+        }
+        if (m.per_class_precision?.length && m.per_class_recall?.length) {
+          lines.push(`    Per-class Prec: ${classNames.map((n,j) => `${n}:${_pct(m.per_class_precision[j])}`).join(', ')}`);
+          lines.push(`    Per-class Rec:  ${classNames.map((n,j) => `${n}:${_pct(m.per_class_recall[j])}`).join(', ')}`);
+        }
       });
     });
   }
 
-  lines.push('=== END SESSION DATA ===');
+  lines.push('\n=== END SESSION DATA ===');
   return lines.join('\n');
 }
 
@@ -1669,7 +1751,7 @@ async function sendChat() {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
         message:         text,
-        history:         CHAT.history.slice(-10),
+        history:         CHAT.history.slice(-11, -1),  // exclude current user msg (sent as `message`)
         session_context: _buildSessionContext(),
       }),
     });
