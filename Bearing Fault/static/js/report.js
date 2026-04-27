@@ -50,17 +50,26 @@ async function _loadEFSLogo() {
   });
 }
 
-async function _getLLMAnalysis(prompt) {
+async function _getLLMAnalysis(prompt, sessionCtx) {
+  const TIMEOUT_MS = 90000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const resp = await fetch('/api/chat', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ message: prompt, history: [] }),
+      body:    JSON.stringify({ message: prompt, history: [], session_context: sessionCtx || '' }),
+      signal:  controller.signal,
     });
     if (!resp.ok) return null;
     const data = await resp.json();
     return (data.reply || '').trim() || null;
-  } catch (e) { return null; }
+  } catch (e) {
+    if (e.name === 'AbortError') return '__timeout__';
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -68,7 +77,7 @@ async function _getLLMAnalysis(prompt) {
 // ──────────────────────────────────────────────────────────────────────────────
 async function generateReport() {
   const btn = document.getElementById('btn-report');
-  if (btn) { btn.disabled = true; btn.innerHTML = 'Preparing AI analysis…'; }
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Requesting AI analysis… (up to 90 s)'; }
 
   try {
     // ── Resolve session data ─────────────────────────────────────────────────
@@ -84,6 +93,7 @@ async function generateReport() {
     // (in-memory may have newer rounds not yet flushed, localStorage may have data
     //  from other pages that were never loaded into this tab's STATE)
     const liveSession = (typeof STATE !== 'undefined' && STATE.session) ? STATE.session : null;
+    const sessionObj  = liveSession || freshSession;
 
     function _pickLonger(a, b) { return (a?.length ?? 0) >= (b?.length ?? 0) ? (a || []) : (b || []); }
 
@@ -142,7 +152,7 @@ async function generateReport() {
 
     // ── Build LLM analysis prompt ────────────────────────────────────────────
     const promptParts = [
-      `Analyze the following Federated Learning (FL) experiment session for bearing fault detection.\nSession started: ${session?.startTime ?? 'unknown'}\n`,
+      `Analyze the following Federated Learning (FL) experiment session for bearing fault detection.\nSession started: ${sessionObj?.startTime ?? 'unknown'}\n`,
     ];
     if (effectiveRuns.length > 0) {
       promptParts.push(`## Training Runs (${effectiveRuns.length} total)`);
@@ -186,21 +196,27 @@ async function generateReport() {
       });
     }
     promptParts.push(
+      '\nThe full session context (all 20 config parameters, training curve, confusion matrices, per-client metrics, prediction probabilities, benchmark per-class metrics) is available to you via the system context.',
       '\nProvide a structured technical analysis with these sections:',
-      '1. Overall Session Assessment',
-      '2. Training Performance & Convergence',
-      '3. Per-Class Fault Detection Insights',
-      '4. Federated Learning Strategy Evaluation',
-      '5. Recommendations for Improvement',
-      '6. Conclusion',
-      '\nUse plain text. Start each section with its number and title on its own line. Be technical and concise.'
+      '1. Overall Session Assessment — summarise what was achieved, noting best accuracy and number of runs',
+      '2. Training Performance & Convergence — analyse loss/accuracy curves, convergence speed, any signs of overfitting or underfitting',
+      '3. Per-Class Fault Detection Insights — which fault classes (Normal, Inner Race, Outer Race, Ball) were detected well or poorly, and why',
+      '4. Federated Learning Strategy Evaluation — assess the chosen aggregation strategy, number of clients, data partitioning, and FL-specific hyperparameters',
+      '5. Recommendations for Improvement — concrete, actionable suggestions for better accuracy, faster convergence, or improved fault detection',
+      '6. Conclusion — one-paragraph summary of the session outcomes',
+      '\nUse plain text only. Start each section on its own line with the number and title (e.g., "1. Overall Session Assessment"). Be specific, technical, and data-driven — cite the actual numbers from the session data above.'
     );
 
+    // ── Build session context string for LLM (gives it full detail) ──────────
+    const sessionCtxStr = typeof _buildSessionContext === 'function' ? _buildSessionContext() : '';
+
     // ── Parallel: logo + LLM ─────────────────────────────────────────────────
-    const [logoDataURL, llmAnalysis] = await Promise.all([
+    const [logoDataURL, llmRaw] = await Promise.all([
       _loadEFSLogo(),
-      _getLLMAnalysis(promptParts.join('\n')),
+      _getLLMAnalysis(promptParts.join('\n'), sessionCtxStr),
     ]);
+    const llmTimedOut = llmRaw === '__timeout__';
+    const llmAnalysis = llmTimedOut ? null : llmRaw;
 
     if (btn) btn.innerHTML = 'Building PDF…';
 
@@ -222,7 +238,7 @@ async function generateReport() {
       white:    [255, 255, 255],
     };
 
-    let sectionNum = 0;
+    let sectionNum = 1;
     function nextSection() { return ++sectionNum; }
 
     function drawPageBg() {
@@ -238,7 +254,7 @@ async function generateReport() {
       const y = PH - 12;
       hRule(y - 1, C.rule, 0.25);
       doc.setFontSize(7.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.light);
-      doc.text('BearingFL — Federated Learning Session Report  ·  EFS AI Solution Team', ML, y + 4);
+      doc.text('BearingFL — Federated Learning Session Report', ML, y + 4);
       doc.text(generatedAt.toLocaleDateString('en-GB', { year:'numeric', month:'long', day:'numeric' }), PW / 2, y + 4, { align: 'center' });
       doc.text(`Page ${pageNum} of ${totalPages}`, PW - MR, y + 4, { align: 'right' });
     }
@@ -362,15 +378,15 @@ async function generateReport() {
     drawPageBg();
     doc.setFillColor(...C.navy); doc.rect(0, 0, PW, 4, 'F');
 
-    // EFS Logo top-right
+    // EFS Logo top-left
     if (logoDataURL) {
-      const logoW = 40, logoH = Math.round(40 * 107 / 136);
-      doc.addImage(logoDataURL, 'PNG', PW - MR - logoW, 7, logoW, logoH);
+      const logoW = 26, logoH = Math.round(26 * 107 / 136);
+      doc.addImage(logoDataURL, 'PNG', ML, 7, logoW, logoH);
     }
 
     let y = 18;
     doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.light);
-    doc.text('BEARINGFL FEDERATED LEARNING PLATFORM', ML, y);
+    doc.text('BEARINGFL FEDERATED LEARNING PLATFORM', PW - MR, y, { align: 'right' });
 
     y = 42;
     doc.setFontSize(32); doc.setFont('helvetica', 'bold'); doc.setTextColor(...C.navy);
@@ -386,7 +402,7 @@ async function generateReport() {
     doc.setFontSize(8.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.mid);
     const dateStr = generatedAt.toLocaleDateString('en-GB', { year:'numeric', month:'long', day:'numeric' });
     const timeStr = generatedAt.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
-    const sessionStart = session?.startTime ? new Date(session.startTime).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
+    const sessionStart = sessionObj?.startTime ? new Date(sessionObj.startTime).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' }) : '—';
     doc.text(`Report generated: ${dateStr}  ·  ${timeStr}`, PW / 2, y, { align: 'center' });
     y += 6;
     doc.text(`Session started: ${sessionStart}  ·  Model: ${(bestRun?.config?.model_type || '—').toUpperCase()}  ·  Strategy: ${(bestRun?.config?.aggregation_strategy || '—').toUpperCase()}`, PW / 2, y, { align: 'center' });
@@ -408,15 +424,17 @@ async function generateReport() {
     doc.text('Contents', ML, y);
     y += 8;
 
-    const sections = [
-      { n: 1, title: 'Cover & Session Summary' },
-      { n: 2, title: `Experiment Configuration${effectiveRuns.length > 1 ? ' (' + effectiveRuns.length + ' runs)' : ''}` },
-      { n: 3, title: hasTrained ? `Training Results${effectiveRuns.length > 1 ? ' — ' + effectiveRuns.length + ' runs' : ''}` : 'Training Results (no data)' },
-      { n: 4, title: hasTrained ? 'Data Distribution & Evaluation' : 'Evaluation (no data)' },
-      { n: 5, title: hasPrediction ? `Prediction Results (${effectivePreds.length} total)` : 'Prediction Results (no data)' },
-      { n: 6, title: hasBenchmark  ? `Benchmark Comparison (${effectiveBMs.length} run${effectiveBMs.length > 1 ? 's' : ''})` : 'Benchmark (no data)' },
-      { n: 7, title: llmAnalysis ? 'AI Analysis & Recommendations' : 'AI Analysis (unavailable)' },
-    ];
+    const sections = [{ n: 1, title: 'Cover & Session Summary' }];
+    { let sn = 2;
+      sections.push({ n: sn++, title: llmAnalysis ? 'AI Analysis & Recommendations' : (llmTimedOut ? 'AI Analysis (timed out)' : 'AI Analysis (unavailable)') });
+      if (hasTrained) {
+        sections.push({ n: sn++, title: `Experiment Configuration${effectiveRuns.length > 1 ? ' (' + effectiveRuns.length + ' runs)' : ''}` });
+        sections.push({ n: sn++, title: `Training Results${effectiveRuns.length > 1 ? ' — ' + effectiveRuns.length + ' runs' : ''}` });
+        sections.push({ n: sn++, title: 'Data Distribution & Evaluation' });
+      }
+      if (hasPrediction) sections.push({ n: sn++, title: `Prediction Results (${effectivePreds.length} total)` });
+      if (hasBenchmark)  sections.push({ n: sn++, title: `Benchmark Comparison (${effectiveBMs.length} run${effectiveBMs.length > 1 ? 's' : ''})` });
+    }
     sections.forEach((s, i) => {
       const rowY = y + i * 9;
       if (i % 2 === 0) { doc.setFillColor(...C.rowAlt); doc.rect(ML, rowY - 2.5, CW, 9, 'F'); }
@@ -433,21 +451,39 @@ async function generateReport() {
 
     const coverBrandY = PH - 20;
     doc.setFontSize(7.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.light);
-    doc.text('Built by EFS AI Solution Team  ·  www.efs.at', ML, coverBrandY);
     doc.text('Powered by Flower Federated Learning  ·  flower.ai', PW - MR, coverBrandY, { align: 'right' });
     doc.setFillColor(...C.navy); doc.rect(0, PH - 4, PW, 4, 'F');
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  PAGE 2 — EXPERIMENT CONFIGURATION  (all training runs)
+    //  PAGE 2 — AI ANALYSIS & RECOMMENDATIONS
     // ══════════════════════════════════════════════════════════════════════════
+    doc.addPage(); drawPageBg(); y = MT;
+    y = drawSectionHeader(`${nextSection()}.  AI Analysis & Recommendations`, y);
+
+    doc.setFillColor(...C.navy); doc.rect(ML, y, CW, 8, 'F');
+    doc.setFontSize(7.5); doc.setFont('helvetica','normal'); doc.setTextColor(...C.white);
+    doc.text('Generated by EFS AI Solution Team — powered by LM Studio / Gemma 4 26B', ML+4, y+5.2);
+    y += 13;
+
+    if (llmTimedOut) {
+      doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(...C.mid);
+      doc.text('AI analysis timed out (> 90 s). Ensure the LLM service is responsive and regenerate the report.', ML, y+6);
+    } else if (!llmAnalysis) {
+      doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(...C.mid);
+      doc.text('AI analysis could not be generated. Ensure the LLM service is running and retry.', ML, y+6);
+    } else {
+      y = renderAnalysisText(llmAnalysis, y);
+    }
+
+
+    // ══════════════════════════════════════════════════════════════════════════
+    //  EXPERIMENT CONFIGURATION  (all training runs)
+    // ══════════════════════════════════════════════════════════════════════════
+    if (hasTrained) {
     doc.addPage(); drawPageBg(); y = MT;
     y = drawSectionHeader(`${nextSection()}.  Experiment Configuration`, y);
 
-    if (!hasTrained) {
-      doc.setFontSize(9); doc.setTextColor(...C.mid);
-      doc.text('No training session captured yet.', ML, y + 6);
-    } else {
-      effectiveRuns.forEach((run, ri) => {
+    effectiveRuns.forEach((run, ri) => {
         const cfg = run.config || {};
         if (effectiveRuns.length > 1) {
           y = checkPageBreak(y, 16);
@@ -504,19 +540,16 @@ async function generateReport() {
         });
         y = Math.max(leftY, doc.lastAutoTable.finalY + 7) + 4;
       });
-    }
+    } // end hasTrained (config)
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  PAGE 3 — TRAINING RESULTS  (one sub-section per run)
+    //  TRAINING RESULTS  (one sub-section per run)
     // ══════════════════════════════════════════════════════════════════════════
+    if (hasTrained) {
     doc.addPage(); drawPageBg(); y = MT;
     y = drawSectionHeader(`${nextSection()}.  Training Results`, y);
 
-    if (!hasTrained) {
-      doc.setFontSize(9); doc.setTextColor(...C.mid);
-      doc.text('No training data. Run a training session to populate this section.', ML, y + 6);
-    } else {
-      effectiveRuns.forEach((run, ri) => {
+    effectiveRuns.forEach((run, ri) => {
         y = checkPageBreak(y, 35);
         if (effectiveRuns.length > 1) {
           const ts     = run.timestamp ? '  (' + new Date(run.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + ')' : '';
@@ -601,19 +634,16 @@ async function generateReport() {
         }
         y += 4;
       });
-    }
+    } // end hasTrained (training results)
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  PAGE 4 — DATA DISTRIBUTION & EVALUATION  (confusion matrix per run)
+    //  DATA DISTRIBUTION & EVALUATION  (confusion matrix per run)
     // ══════════════════════════════════════════════════════════════════════════
+    if (hasTrained) {
     doc.addPage(); drawPageBg(); y = MT;
     y = drawSectionHeader(`${nextSection()}.  Data Distribution & Evaluation`, y);
 
-    if (!hasTrained) {
-      doc.setFontSize(9); doc.setTextColor(...C.mid);
-      doc.text('Not available — complete a training session first.', ML, y + 6);
-    } else {
-      effectiveRuns.forEach((run, ri) => {
+    effectiveRuns.forEach((run, ri) => {
         if (effectiveRuns.length > 1) {
           y = checkPageBreak(y, 14);
           const ts = run.timestamp ? '  (' + new Date(run.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) + ')' : '';
@@ -666,19 +696,16 @@ async function generateReport() {
         }
         y += 4;
       });
-    }
+    } // end hasTrained (data distribution)
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  PAGE 5 — PREDICTION RESULTS  (all predictions this session)
+    //  PREDICTION RESULTS  (all predictions this session)
     // ══════════════════════════════════════════════════════════════════════════
+    if (hasPrediction) {
     doc.addPage(); drawPageBg(); y = MT;
     y = drawSectionHeader(`${nextSection()}.  Prediction Results`, y);
 
-    if (!hasPrediction) {
-      doc.setFontSize(9); doc.setTextColor(...C.mid);
-      doc.text('No prediction was run in this session.', ML, y + 6);
-    } else {
-      effectivePreds.forEach((pred, pi) => {
+    effectivePreds.forEach((pred, pi) => {
         y = checkPageBreak(y, 30);
         const ts = pred.timestamp ? new Date(pred.timestamp).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : null;
         const header = `Prediction ${pi + 1} of ${effectivePreds.length}${ts ? '  (' + ts + ')' : ''}  ·  Input: ${pred.inputSource || 'Unknown'}${pred.trueLabel ? '  ·  True: ' + pred.trueLabel.name : ''}`;
@@ -749,19 +776,16 @@ async function generateReport() {
         }
         y += 6;
       });
-    }
+    } // end hasPrediction
 
     // ══════════════════════════════════════════════════════════════════════════
-    //  PAGE 6 — BENCHMARK COMPARISON  (all benchmark runs)
+    //  BENCHMARK COMPARISON  (all benchmark runs)
     // ══════════════════════════════════════════════════════════════════════════
+    if (hasBenchmark) {
     doc.addPage(); drawPageBg(); y = MT;
     y = drawSectionHeader(`${nextSection()}.  Benchmark Comparison`, y);
 
-    if (!hasBenchmark) {
-      doc.setFontSize(9); doc.setTextColor(...C.mid);
-      doc.text('No benchmark was run in this session.', ML, y + 6);
-    } else {
-      effectiveBMs.forEach((bm, bi) => {
+    effectiveBMs.forEach((bm, bi) => {
         const data = bm.result || {};
         const bmModels  = data.models      || [];
         const bmClasses = data.class_names || classNames;
@@ -859,33 +883,7 @@ async function generateReport() {
         });
         y += 8;
       });
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    //  PAGE 7 — AI ANALYSIS & RECOMMENDATIONS
-    // ══════════════════════════════════════════════════════════════════════════
-    doc.addPage(); drawPageBg(); y = MT;
-    y = drawSectionHeader(`${nextSection()}.  AI Analysis & Recommendations`, y);
-
-    doc.setFillColor(...C.navy); doc.rect(ML, y, CW, 8, 'F');
-    doc.setFontSize(7.5); doc.setFont('helvetica','normal'); doc.setTextColor(...C.white);
-    doc.text('Generated by EFS AI Solution Team — powered by LM Studio / Gemma 4 26B', ML+4, y+5.2);
-    y += 13;
-
-    if (!llmAnalysis) {
-      doc.setFontSize(9); doc.setFont('helvetica','normal'); doc.setTextColor(...C.mid);
-      doc.text('AI analysis could not be generated. Ensure the LLM service is running and retry.', ML, y+6);
-    } else {
-      y = renderAnalysisText(llmAnalysis, y);
-    }
-
-    // EFS logo watermark on AI page
-    if (logoDataURL && y < PH - 32) {
-      const wW = 28, wH = Math.round(28*107/136);
-      doc.addImage(logoDataURL, 'PNG', PW-MR-wW, PH-28, wW, wH);
-      doc.setFontSize(7); doc.setFont('helvetica','normal'); doc.setTextColor(...C.light);
-      doc.text('EFS AI Solution Team', PW-MR-wW-2, PH-28+wH/2+1, { align:'right' });
-    }
+    } // end hasBenchmark
 
     // ── Footers ───────────────────────────────────────────────────────────────
     const totalPages = doc.getNumberOfPages();
