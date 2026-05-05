@@ -42,6 +42,33 @@ def _write_index(entries: list[dict]) -> None:
     INDEX_FILE.write_text(json.dumps(entries, indent=2))
 
 
+def _save_metrics_json(model_id: str, cfg: FLConfig,
+                        round_history: list[dict],
+                        data_distribution: dict,
+                        evaluation: dict,
+                        best_round: int, best_acc: float,
+                        final_acc: float, final_loss: float,
+                        total_elapsed: float) -> None:
+    """Write a companion {model_id}_metrics.json next to the checkpoint."""
+    payload = {
+        "model_id":    model_id,
+        "created_at":  datetime.now(timezone.utc).isoformat(),
+        "config":      cfg.model_dump(),
+        "training": {
+            "round_history":       round_history,
+            "best_round":          best_round,
+            "best_accuracy":       round(best_acc, 6),
+            "final_accuracy":      round(final_acc, 6),
+            "final_loss":          round(final_loss, 6),
+            "total_elapsed_seconds": total_elapsed,
+        },
+        "evaluation":        evaluation,
+        "data_distribution": data_distribution,
+    }
+    metrics_path = MODELS_DIR / f"{model_id}_metrics.json"
+    metrics_path.write_text(json.dumps(payload, indent=2))
+
+
 def _save_model_to_library(global_model, cfg: FLConfig,
                             final_acc: float, best_acc: float,
                             best_round: int, cm: list) -> tuple[str, dict]:
@@ -116,13 +143,13 @@ class FLServer:
         test_loader = dm.get_test_loader(test_idx, batch_size=256)
 
         dist_summary = dm.distribution_summary(client_datasets)
-        await self.broadcast({
-            "type": "DATA_DISTRIBUTION",
-            "clients": dist_summary,
-            "global_test_samples": len(test_idx),
-            "partition_strategy": cfg.partition_strategy,
-            "alpha": cfg.dirichlet_alpha,
-        })
+        data_distribution = {
+            "clients":              dist_summary,
+            "global_test_samples":  len(test_idx),
+            "partition_strategy":   cfg.partition_strategy,
+            "alpha":                cfg.dirichlet_alpha,
+        }
+        await self.broadcast({"type": "DATA_DISTRIBUTION", **data_distribution})
         await self._log("SUCCESS", f"Data partitioned. Global test set: {len(test_idx)} samples.")
 
         # ── Model + Clients ──────────────────────────────────────────────────
@@ -130,6 +157,7 @@ class FLServer:
         trainers = [ClientTrainer(ds.client_id, ds, cfg, self.device) for ds in client_datasets]
 
         best_acc, best_round = 0.0, 0
+        round_history: list[dict] = []
         executor = ThreadPoolExecutor(max_workers=min(cfg.num_clients, 8))
         loop = asyncio.get_event_loop()
 
@@ -190,6 +218,15 @@ class FLServer:
                 for u in updates
             ]
             elapsed = round(time.time() - t0, 1)
+            round_record = {
+                "round":            rnd,
+                "global_loss":      round(g_loss, 6),
+                "global_accuracy":  round(g_acc, 6),
+                "elapsed_seconds":  elapsed,
+                "selected_clients": selected_ids,
+                "clients":          client_info,
+            }
+            round_history.append(round_record)
             await self.broadcast({
                 "type": "ROUND_COMPLETE",
                 "round": rnd, "num_rounds": cfg.num_rounds,
@@ -212,12 +249,32 @@ class FLServer:
 
         # ── Final evaluation + save ───────────────────────────────────────────
         if not self._stop:
+            from fl.metrics import benchmark_model as _bm
             g_loss, g_acc = evaluate_global(global_model, test_loader, self.device)
-            cm = compute_confusion_matrix(global_model, test_loader, self.device)
             total_elapsed = round(time.time() - t0, 1)
+
+            bm = _bm(global_model, test_loader, self.device)
+            cm = bm["confusion_matrix"]
+            class_names = [LABEL_NAMES[i] for i in range(NUM_CLASSES)]
+            evaluation = {
+                "confusion_matrix":    cm,
+                "class_names":         class_names,
+                "overall_accuracy":    bm["accuracy"],
+                "overall_loss":        bm["loss"],
+                "per_class_accuracy":  bm["per_class_accuracy"],
+                "per_class_precision": bm["per_class_precision"],
+                "per_class_recall":    bm["per_class_recall"],
+                "per_class_f1":        bm["per_class_f1"],
+                "inference_time_ms":   bm["inference_time_ms"],
+                "test_samples":        bm["total_samples"],
+            }
 
             model_id, meta = _save_model_to_library(
                 global_model, cfg, g_acc, best_acc, best_round, cm
+            )
+            _save_metrics_json(
+                model_id, cfg, round_history, data_distribution, evaluation,
+                best_round, best_acc, g_acc, g_loss, total_elapsed,
             )
             await self._log("SUCCESS", f"Model saved → {model_id}  (best acc: {best_acc*100:.2f}%)")
 

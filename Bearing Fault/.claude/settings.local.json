@@ -13,7 +13,19 @@
       "Bash(mv \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/meta.csv\" \"/home/soroushnaseri/Predictive Maintanace FL/Bearing Fault/data/\")",
       "Bash(python -c ':*)",
       "Bash(python3 -c ':*)",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(docker exec *)",
+      "Bash(curl -s http://localhost:8001/api/models)",
+      "Bash(curl -s http://localhost:8001/api/models/model_20260504_091648/metrics)",
+      "Bash(curl *)",
+      "Bash(sed -i 's|app\\\\.js?v=11|app.js?v=12|g' *.html)",
+      "Bash(sed -i 's|history\\\\.js?v=2|history.js?v=1|g' history.html)",
+      "Bash(node --check \"/home/soroushnaseri/Predictive Maintanace FL/fl-predictive-maintenance/Bearing Fault/static/js/app.js\")",
+      "Bash(node --check \"/home/soroushnaseri/Predictive Maintanace FL/fl-predictive-maintenance/Bearing Fault/static/js/history.js\")",
+      "Bash(node --check \"/home/soroushnaseri/Predictive Maintanace FL/fl-predictive-maintenance/Bearing Fault/static/js/report.js\")",
+      "Bash(echo \"Installing texlive in background \\(PID $!\\)\")",
+      "Bash(docker restart *)",
+      "Bash(docker cp *)"
     ]
   }
 }

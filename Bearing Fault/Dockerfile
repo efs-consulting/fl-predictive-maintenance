@@ -23,6 +23,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       gcc \
       curl \
+      texlive-latex-base \
+      texlive-latex-extra \
+      texlive-fonts-recommended \
  && rm -rf /var/lib/apt/lists/*
 
 # ── Python dependencies ───────────────────────────────────────────────────────

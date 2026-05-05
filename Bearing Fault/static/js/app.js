@@ -80,6 +80,7 @@ const STATE = {
   isTraining: false,
   currentRound: 0,
   numRounds: 0,
+  lastBenchmarkAI: null,   // AI texts keyed by section name, saved for the PDF report
   bestAcc: 0,
   charts: {},
   reconnectTimer: null,
@@ -1011,7 +1012,6 @@ function _windowBreakdown(results) {
 
 function renderPredictionResults(data) {
   STATE.lastPredictionData = data;
-  // Record to session history and persist
   STATE.session.predictions.push({
     timestamp: new Date().toISOString(),
     inputSource: STATE.pendingFile
@@ -1257,7 +1257,6 @@ function _avg(arr) { return arr.reduce((a,b)=>a+b,0) / arr.length; }
 
 function _renderBenchmarkResults(data) {
   STATE.lastBenchmarkData = data;
-  // Record to session history and persist
   STATE.session.benchmarkRuns.push({ timestamp: new Date().toISOString(), result: data });
   _sessionSave();
   const models     = data.models;
@@ -1452,6 +1451,222 @@ function _renderBenchmarkResults(data) {
   });
 
   cmsEl.appendChild(cmGrid);
+
+  // Trigger AI descriptions asynchronously — don't await so charts render immediately
+  _generateBenchmarkAI(data);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+//  Benchmark AI descriptions
+// ──────────────────────────────────────────────────────────────────────────────
+
+function _bmAIRecommendSet(id, text) {
+  const el = document.getElementById(id);
+  if (!el || !text || !text.trim()) { if (el) el.style.display = 'none'; return; }
+  const html = text.trim()
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^\d+\.\s/gm, '<br><span style="color:#34d399;font-weight:700;margin-right:4px">▸</span>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+  el.innerHTML = `
+    <div class="bm-ai-header">
+      <span class="bm-ai-badge">AI</span>
+      Deployment Recommendation
+    </div>
+    <div class="bm-ai-body"><p>${html}</p></div>`;
+}
+
+function _bmAILoading(id, label) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="bm-ai-header">
+      <span class="bm-ai-badge">AI</span>${label}
+    </div>
+    <div class="bm-ai-loading">
+      <div class="bm-ai-spinner"></div>
+      Analyzing with AI…
+    </div>`;
+}
+
+function _bmAISet(id, label, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (!text || !text.trim()) { el.style.display = 'none'; return; }
+  const html = text.trim()
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+  el.innerHTML = `
+    <div class="bm-ai-header">
+      <span class="bm-ai-badge">AI</span>${label}
+    </div>
+    <div class="bm-ai-body"><p>${html}</p></div>`;
+}
+
+function _bmAIError(id, label) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = '';
+  el.innerHTML = `
+    <div class="bm-ai-header">
+      <span class="bm-ai-badge">AI</span>${label || 'AI Analysis'}
+    </div>
+    <div class="bm-ai-body" style="color:#ef4444;font-size:.8rem">
+      AI analysis unavailable. Check server logs or LLM configuration.
+    </div>`;
+}
+
+function _parseBmAI(text) {
+  const keys = ['RECOMMENDATION', 'MODELS', 'SUMMARY', 'TABLE', 'ACCURACY', 'RADAR', 'F1', 'CONFUSION'];
+  const out  = {};
+  for (let i = 0; i < keys.length; i++) {
+    const k    = keys[i];
+    const next = keys[i + 1];
+    const s    = text.indexOf(`### ${k}`);
+    if (s === -1) continue;
+    const start = s + `### ${k}`.length;
+    const e     = next ? text.indexOf(`### ${next}`, start) : text.length;
+    out[k] = text.slice(start, e === -1 ? text.length : e).trim();
+  }
+  return out;
+}
+
+// Architecture descriptions injected into the LLM prompt so it can reason about complexity
+const _BM_ARCH_DESCRIPTIONS = {
+  cnn1d:   'CNN1D — lightweight 1-D convolutional network. Stacked Conv1D + BatchNorm + ReLU + MaxPool blocks followed by FC layers. Captures local frequency patterns. Very fast inference, small footprint, but limited temporal context.',
+  resnet1d:'ResNet1D — residual 1-D CNN with skip connections. Deeper than CNN1D; skip connections mitigate vanishing gradients, enabling more layers without overfitting. Moderate size, strong feature reuse, good generalisation.',
+  bilstm:  'BiLSTM — CNN front-end (feature extraction) feeding a bidirectional LSTM. The LSTM maintains forward and backward hidden state across the 1024-sample window, capturing long-range temporal dependencies in both directions. Heaviest model, highest latency, most expressive for sequential fault signatures.',
+  tcn:     'TCN — Temporal Convolutional Network using dilated causal convolutions with exponentially growing receptive fields. Parallelisable (unlike LSTM), stable gradients, large effective receptive field with moderate parameter count. Good balance of accuracy and speed.',
+};
+
+async function _generateBenchmarkAI(data) {
+  const ids = {
+    RECOMMENDATION: ['bm-ai-recommendation', 'AI Recommendation'],
+    MODELS:         ['bm-ai-models',          'Model Architecture Analysis'],
+    SUMMARY:        ['bm-ai-summary',         'Executive Summary'],
+    TABLE:          ['bm-ai-table',           'Benchmark Table Analysis'],
+    ACCURACY:       ['bm-ai-accuracy',        'Accuracy & Inference Time Analysis'],
+    RADAR:          ['bm-ai-radar',           'Multi-Metric Radar & Per-Class Accuracy Analysis'],
+    F1:             ['bm-ai-f1',              'Per-Class F1 Analysis'],
+    CONFUSION:      ['bm-ai-confusion',       'Confusion Matrix Analysis'],
+  };
+
+  // Show spinners immediately
+  for (const [key, [id, label]] of Object.entries(ids)) _bmAILoading(id, label);
+
+  // Build compact data summary for the prompt
+  const classNames = data.class_names || ['Normal', 'IR', 'OR', 'Ball'];
+  const modelSummaries = data.models.map(m => {
+    const f1      = (_avg(m.per_class_f1)       * 100).toFixed(1);
+    const prec    = (_avg(m.per_class_precision) * 100).toFixed(1);
+    const rec     = (_avg(m.per_class_recall)    * 100).toFixed(1);
+    const diskKB  = Math.round((m.num_params * 4) / 1024);
+    const pcAcc   = m.per_class_accuracy.map((v, i) => `${classNames[i]}=${(v*100).toFixed(1)}%`).join(', ');
+    const pcF1    = m.per_class_f1.map((v, i)       => `${classNames[i]}=${(v*100).toFixed(1)}%`).join(', ');
+    const cmRows  = (m.confusion_matrix || []).map((row, i) =>
+      `  ${classNames[i]}: [${row.join(', ')}]`
+    ).join('\n');
+    // Try to match the architecture type from the label
+    const archKey  = Object.keys(_BM_ARCH_DESCRIPTIONS).find(k => m.label.toLowerCase().includes(k)) || '';
+    const archDesc = archKey ? `  Architecture: ${_BM_ARCH_DESCRIPTIONS[archKey]}` : '';
+    return `Model: ${m.label}
+  Accuracy: ${(m.accuracy*100).toFixed(2)}%  Loss: ${m.loss.toFixed(4)}
+  Macro F1: ${f1}%  Precision: ${prec}%  Recall: ${rec}%
+  Inference: ${m.inference_time_ms}ms  Params: ${_fmtParams(m.num_params)}  Disk: ~${diskKB}KB
+${archDesc}
+  Per-class accuracy: ${pcAcc}
+  Per-class F1: ${pcF1}
+  Confusion matrix (rows=true, cols=predicted):
+${cmRows}`;
+  }).join('\n\n');
+
+  const prompt = `You are a senior machine learning engineer writing a detailed technical report on federated learning benchmark results for bearing fault detection (4 classes: Normal, Inner Race fault, Outer Race fault, Ball fault). The test set has ${(data.test_samples||0).toLocaleString()} samples.
+
+IMPORTANT WRITING RULES:
+- Every section must contain at least one full paragraph of detailed, substantive analysis. Never write just a single sentence or bullet point alone.
+- For RECOMMENDATION and MODELS write multiple paragraphs — these are the most important sections.
+- Use concrete numbers from the data (percentages, parameter counts, latency, disk size). Do not be vague.
+- Use **bold** for model names, metric values, and key conclusions.
+- Use markdown (bold, italic) but do NOT use headers, sub-headers, or horizontal rules inside sections — the section is already titled.
+
+Provide content for each section using this EXACT format with ### headers (no other text outside these sections):
+
+### RECOMMENDATION
+Write at least 3 substantial paragraphs.
+Paragraph 1 — The verdict: Clearly state the single recommended model. Justify the decision by comparing accuracy, macro F1, precision, recall, inference latency, parameter count, disk footprint, and federated aggregation strategy across all benchmarked models. Explain why this specific combination of factors makes it the best choice for a production bearing-fault monitoring system.
+Paragraph 2 — Runner-up and trade-off analysis: Identify the second-best model. Describe exactly which scenario would cause an engineer to choose it over the recommended model (e.g., strict edge-device memory budget, sub-10ms latency requirement, or highest-possible recall for safety-critical fault detection). Quantify the trade-off (e.g., "gains X% accuracy but costs Y× more inference time and Z× more disk space").
+Paragraph 3 — Production risk and caution: Identify the weakest fault class or metric across all models. Explain what this means for real deployment: which fault type is most likely to be missed, what the operational consequence is, and what mitigation strategies (ensemble, threshold tuning, additional data) an engineer should consider.
+
+### MODELS
+Write one detailed paragraph per model, covering all of the following for that model: architecture design (layer types and how they are stacked), the precise parameter count and what drives that count (embedding dimension, hidden units, convolutional filters, etc.), the computational complexity and what it means for inference on embedded hardware, the inductive bias of the architecture (what temporal structure it is good at capturing in a 1024-sample vibration window), how the weight count affects federated training stability and communication cost per round, and a qualitative assessment of parameter efficiency (accuracy achieved per thousand parameters). End each paragraph with a verdict sentence on whether this architecture is a strong or weak choice for federated bearing-fault diagnosis.
+
+### SUMMARY
+Write 3–4 sentences. Cover: which model wins and by how much, the second key finding (e.g., latency gap, class imbalance issue), and a one-sentence deployment recommendation. Be specific with numbers.
+
+### TABLE
+Write at least one full paragraph. Rank all models from best to worst on the overall score (combining accuracy and F1). Highlight which model wins on each individual metric column. Point out any surprising or counter-intuitive result (e.g., a smaller model beating a larger one, or a model with high accuracy but low F1). Discuss accuracy vs inference-time trade-offs explicitly.
+
+### ACCURACY
+Write at least one full paragraph. Analyze the accuracy bar chart and the inference-time chart together. Discuss the spread between the best and worst model, what the accuracy gaps mean in practice (e.g., misclassified samples per 1000), and whether the faster models sacrifice meaningful accuracy. Conclude with which model offers the best accuracy-per-millisecond efficiency.
+
+### RADAR
+Write at least one full paragraph. Analyze the shape of each model's radar polygon across all five axes (accuracy, F1, precision, recall, per-class accuracy). Identify which model is most balanced (polygon closest to a regular pentagon) and which is most lopsided. Discuss any metric where a model underperforms relative to its overall accuracy, suggesting a specific weakness in recall or precision for a fault class.
+
+### F1
+Write at least one full paragraph. Analyze per-class F1 scores for every fault class across all models. Identify the hardest fault class to detect and explain why (e.g., overlapping frequency signatures between Ball and Inner Race faults). Point out any model that is particularly strong or weak on a specific class. Discuss whether macro F1 is a fair summary or masks per-class disparities.
+
+### CONFUSION
+Write at least one full paragraph. Analyze the confusion matrices of all models. Identify the most frequent off-diagonal entries (most common misclassification pairs) and explain the physical reason (similar vibration frequency signatures). Compare how many models share the same failure mode. Discuss the deployment implication: is the most common error a safety-critical miss (fault classified as Normal) or a benign swap between two fault types?
+
+BENCHMARK DATA:
+${modelSummaries}`;
+
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: prompt, history: [], session_context: '' }),
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const { reply } = await res.json();
+    console.log('Benchmark AI raw reply:', reply.slice(0, 300));
+    const sections = _parseBmAI(reply);
+    console.log('Benchmark AI parsed sections:', Object.keys(sections));
+
+    const noFallback = new Set(['RECOMMENDATION', 'MODELS']);
+    for (const [key, [id, label]] of Object.entries(ids)) {
+      const text = sections[key] || (noFallback.has(key) ? null : (Object.values(sections)[0] || reply));
+      if (key === 'RECOMMENDATION') {
+        if (text) _bmAIRecommendSet(id, text);
+        else _bmAIError(id, label);
+      } else {
+        if (text) _bmAISet(id, label, text);
+        else _bmAIError(id, label);
+      }
+    }
+
+    // Save all AI texts so the report generator can copy them without a second LLM call
+    try {
+      const aiTexts = {};
+      for (const [key, [id]] of Object.entries(ids)) {
+        const el = document.getElementById(id);
+        if (!el || el.style.display === 'none') continue;
+        const body = el.querySelector('.bm-ai-body');
+        if (body && body.innerText.trim()) aiTexts[key] = body.innerText.trim();
+      }
+      STATE.lastBenchmarkAI = aiTexts;
+      localStorage.setItem('bearingfl_benchmark_ai', JSON.stringify(aiTexts));
+    } catch (_) {}
+
+  } catch (e) {
+    console.error('Benchmark AI failed:', e);
+    for (const [key, [id, label]] of Object.entries(ids)) _bmAIError(id, label);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

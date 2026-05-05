@@ -1,12 +1,16 @@
 from __future__ import annotations
 import asyncio
+import base64
 import io
 import json
 import logging
 import os
 import pathlib
+import shutil
+import subprocess
+import tempfile
 from contextlib import asynccontextmanager
-from typing import List, Set
+from typing import Dict, List, Set
 
 import httpx
 
@@ -265,6 +269,14 @@ async def config_defaults():
 @app.get("/api/models")
 async def list_models():
     return {"models": _read_index()}
+
+
+@app.get("/api/models/{model_id}/metrics")
+async def get_model_metrics(model_id: str):
+    metrics_path = MODELS_DIR / f"{model_id}_metrics.json"
+    if not metrics_path.exists():
+        raise HTTPException(status_code=404, detail="Metrics file not found for this model.")
+    return json.loads(metrics_path.read_text())
 
 
 @app.delete("/api/models/{model_id}")
@@ -594,6 +606,74 @@ async def chat_endpoint(payload: ChatRequest):
             "to enable the AI chat feature."
         )
     }
+
+
+# ── LaTeX report compilation ──────────────────────────────────────────────────
+
+class ReportCompileRequest(BaseModel):
+    latex_source: str
+    images: Dict[str, str] = {}   # filename -> "data:image/png;base64,..." or raw base64
+
+@app.post("/api/report/compile")
+async def compile_report(req: ReportCompileRequest):
+    """Compile a LaTeX source string to PDF and return the binary PDF."""
+    pdflatex = shutil.which("pdflatex")
+    if not pdflatex:
+        raise HTTPException(status_code=503, detail="pdflatex not found on server")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = pathlib.Path(tmpdir)
+
+        # Write embedded chart images
+        for name, data in req.images.items():
+            raw = data.split(",", 1)[-1]          # strip data-URI prefix if present
+            try:
+                (tmp / name).write_bytes(base64.b64decode(raw))
+            except Exception:
+                pass
+
+        # Write LaTeX source
+        (tmp / "report.tex").write_text(req.latex_source, encoding="utf-8")
+
+        # Run pdflatex twice (resolves cross-references, tcolorbox breakable, etc.)
+        cmd = [pdflatex, "-interaction=nonstopmode", "-halt-on-error", "report.tex"]
+        for _ in range(2):
+            result = subprocess.run(
+                cmd, cwd=tmpdir,
+                capture_output=True, text=True, timeout=90,
+            )
+            if result.returncode != 0:
+                # Extract error lines from the log file for a clear diagnosis
+                log_file = tmp / "report.log"
+                error_detail = ""
+                if log_file.exists():
+                    log_text = log_file.read_text(encoding="utf-8", errors="replace")
+                    # Grab lines starting with ! and the few lines after each
+                    import re as _re
+                    lines = log_text.splitlines()
+                    error_lines = []
+                    for i, ln in enumerate(lines):
+                        if ln.startswith("!") or (error_lines and i < error_lines[-1][0] + 5):
+                            error_lines.append((i, ln))
+                    if error_lines:
+                        error_detail = "\n".join(ln for _, ln in error_lines[:60])
+                    else:
+                        error_detail = log_text[-3000:]
+                else:
+                    error_detail = (result.stdout or "")[-3000:]
+                logger.error("pdflatex failed:\n%s", error_detail)
+                raise HTTPException(status_code=500, detail=f"pdflatex error:\n{error_detail}")
+
+        pdf = tmp / "report.pdf"
+        if not pdf.exists():
+            raise HTTPException(status_code=500, detail="PDF not produced by pdflatex")
+
+        from fastapi.responses import Response
+        return Response(
+            content=pdf.read_bytes(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": 'attachment; filename="BearingFL_Benchmark_Report.pdf"'},
+        )
 
 
 # ── Static files + SPA fallback ───────────────────────────────────────────────

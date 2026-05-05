@@ -8,6 +8,77 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="icon" type="image/svg+xml" href="/static/efs-logo.svg" />
   <link rel="stylesheet" href="/static/css/style.css" />
+  <style>
+    .bm-ai-panel {
+      background: linear-gradient(135deg, rgba(99,102,241,.06), rgba(139,92,246,.04));
+      border: 1px solid rgba(99,102,241,.2);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+      font-size: .85rem;
+      line-height: 1.7;
+      color: #cbd5e1;
+    }
+    .bm-ai-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 10px;
+      font-size: .72rem; font-weight: 700;
+      color: #818cf8; text-transform: uppercase; letter-spacing: .08em;
+    }
+    .bm-ai-badge {
+      background: rgba(99,102,241,.15); border: 1px solid rgba(99,102,241,.3);
+      border-radius: 4px; padding: 2px 7px;
+      font-size: .65rem; font-weight: 700; color: #818cf8;
+    }
+    .bm-ai-body strong { color: #e2e8f0; }
+    .bm-ai-body em    { color: #94a3b8; font-style: normal; }
+    .bm-ai-loading {
+      display: flex; align-items: center; gap: 10px; color: #475569; font-size: .82rem;
+    }
+    .bm-ai-spinner {
+      width: 16px; height: 16px; border: 2px solid #1e293b;
+      border-top-color: #818cf8; border-radius: 50%;
+      animation: bm-spin .7s linear infinite; flex-shrink: 0;
+    }
+    @keyframes bm-spin { to { transform: rotate(360deg); } }
+
+    /* ── Recommendation card ───────────────────────────── */
+    .bm-recommend-card {
+      background: linear-gradient(135deg, rgba(16,185,129,.08), rgba(52,211,153,.04));
+      border: 1px solid rgba(16,185,129,.35);
+      border-left: 4px solid #10b981;
+      border-radius: 12px;
+      padding: 22px 24px;
+      margin-bottom: 20px;
+    }
+    .bm-recommend-card .bm-ai-header {
+      color: #34d399;
+      font-size: .75rem;
+    }
+    .bm-recommend-card .bm-ai-badge {
+      background: rgba(16,185,129,.15);
+      border-color: rgba(16,185,129,.35);
+      color: #34d399;
+    }
+    .bm-recommend-card .bm-ai-body {
+      font-size: .9rem;
+      line-height: 1.75;
+      color: #e2e8f0;
+    }
+    .bm-recommend-card .bm-ai-body strong { color: #6ee7b7; }
+    .bm-recommend-card .bm-ai-body em    { color: #94a3b8; font-style: normal; }
+    .bm-recommend-verdict {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: rgba(16,185,129,.12); border: 1px solid rgba(16,185,129,.3);
+      border-radius: 8px; padding: 6px 14px;
+      font-size: .78rem; font-weight: 600; color: #6ee7b7;
+      margin-bottom: 12px;
+    }
+    .bm-recommend-verdict-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #10b981;
+      box-shadow: 0 0 6px #10b981;
+    }
+  </style>
 </head>
 <body>
 
@@ -21,6 +92,7 @@
     <a href="/static/training.html"   class="nav-link">FL Training</a>
     <a href="/static/prediction.html" class="nav-link">Prediction</a>
     <a href="/static/benchmark.html"  class="nav-link nav-active">Benchmark</a>
+    <a href="/static/history.html"    class="nav-link">History</a>
   </nav>
   <div class="header-right">
     <div class="conn-badge connecting" id="conn-badge">
@@ -134,6 +206,15 @@
     <!-- Results -->
     <div id="bm-results" style="display:none">
 
+      <!-- AI Recommendation (top decision card) -->
+      <div id="bm-ai-recommendation" class="bm-recommend-card" style="display:none"></div>
+
+      <!-- AI Model Architecture Analysis -->
+      <div id="bm-ai-models" class="bm-ai-panel" style="display:none"></div>
+
+      <!-- AI Executive Summary -->
+      <div id="bm-ai-summary" class="bm-ai-panel" style="display:none"></div>
+
       <div class="chart-card">
         <div class="chart-title" data-tooltip="Side-by-side comparison of benchmarked models.">
           <div class="chart-title-dot" style="background:#818cf8"></div>
@@ -142,6 +223,7 @@
         </div>
         <div id="bm-summary-table"></div>
       </div>
+      <div id="bm-ai-table" class="bm-ai-panel" style="display:none"></div>
 
       <div class="charts-grid">
         <div class="chart-card">
@@ -159,6 +241,7 @@
           <div class="chart-wrap" style="height:200px"><canvas id="bm-chart-time"></canvas></div>
         </div>
       </div>
+      <div id="bm-ai-accuracy" class="bm-ai-panel" style="display:none"></div>
 
       <div class="charts-grid">
         <div class="chart-card">
@@ -176,6 +259,7 @@
           <div class="chart-wrap" style="height:280px"><canvas id="bm-chart-class-acc"></canvas></div>
         </div>
       </div>
+      <div id="bm-ai-radar" class="bm-ai-panel" style="display:none"></div>
 
       <div class="chart-card">
         <div class="chart-title" data-tooltip="F1 score per fault class for each model.">
@@ -184,6 +268,7 @@
         </div>
         <div class="chart-wrap" style="height:240px"><canvas id="bm-chart-f1"></canvas></div>
       </div>
+      <div id="bm-ai-f1" class="bm-ai-panel" style="display:none"></div>
 
       <div class="chart-card">
         <div class="chart-title" data-tooltip="One confusion matrix per model.">
@@ -192,6 +277,7 @@
         </div>
         <div id="bm-cms"></div>
       </div>
+      <div id="bm-ai-confusion" class="bm-ai-panel" style="display:none"></div>
 
     </div><!-- /#bm-results -->
 
@@ -366,8 +452,8 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
-<script src="/static/js/app.js?v=5" defer></script>
-<script src="/static/js/report.js?v=5" defer></script>
+<script src="/static/js/app.js?v=13" defer></script>
+<script src="/static/js/report.js?v=12" defer></script>
 <script src="/static/js/guide.js" defer></script>
 <script src="/static/js/manual.js" defer></script>
 <script src="/static/js/tooltip.js" defer></script>
